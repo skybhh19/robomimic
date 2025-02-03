@@ -23,7 +23,7 @@ class EnvRobosuite(EB.EnvBase):
         render=False, 
         render_offscreen=False, 
         use_image_obs=False, 
-        postprocess_visual_obs=True, 
+        postprocess_visual_obs=True,
         **kwargs,
     ):
         """
@@ -48,8 +48,8 @@ class EnvRobosuite(EB.EnvBase):
 
         # robosuite version check
         self._is_v1 = (robosuite.__version__.split(".")[0] == "1")
-        if self._is_v1:
-            assert (int(robosuite.__version__.split(".")[1]) >= 2), "only support robosuite v0.3 and v1.2+"
+        # if self._is_v1:
+        #     assert (int(robosuite.__version__.split(".")[1]) >= 2), "only support robosuite v0.3 and v1.2+"
 
         kwargs = deepcopy(kwargs)
 
@@ -88,7 +88,7 @@ class EnvRobosuite(EB.EnvBase):
                 if ("joint_pos" in ob_name) or ("eef_vel" in ob_name):
                     self.env.modify_observable(observable_name=ob_name, attribute="active", modifier=True)
 
-    def step(self, action):
+    def step(self, action, **kwargs):
         """
         Step in the environment with an action.
 
@@ -101,7 +101,7 @@ class EnvRobosuite(EB.EnvBase):
             done (bool): whether the task is done
             info (dict): extra information
         """
-        obs, r, done, info = self.env.step(action)
+        obs, r, done, info = self.env.step(action, **kwargs)
         obs = self.get_observation(obs)
         return obs, r, self.is_done(), info
 
@@ -129,6 +129,7 @@ class EnvRobosuite(EB.EnvBase):
                 if "states" is in @state)
         """
         should_ret = False
+        assert "states" in state
         if "model" in state:
             self.reset()
             xml = postprocess_model_xml(state["model"])
@@ -188,6 +189,19 @@ class EnvRobosuite(EB.EnvBase):
 
         # "object" key contains object information
         ret["object"] = np.array(di["object-state"])
+        try:
+            ret["object_centric"] = np.array(di["object_centric"])
+        except:
+            pass
+        try:
+            ret["obj_pos"] = np.array(di["obj_pos"])
+            ret["obj_quat"] = np.array(di["obj_quat"])
+        except:
+            pass
+        try:
+            ret["obj_ind"] = np.array(di["obj_ind"])
+        except:
+            pass
 
         if self._is_v1:
             for robot in self.env.robots:
@@ -347,6 +361,161 @@ class EnvRobosuite(EB.EnvBase):
             render_offscreen=has_camera, 
             use_image_obs=has_camera, 
             postprocess_visual_obs=False,
+            **kwargs,
+        )
+
+    @classmethod
+    def create_for_segmentation_evaluation(
+            cls,
+            env_name,
+            camera_names,
+            camera_height,
+            camera_width,
+            reward_shaping,
+            **kwargs,
+    ):
+        """
+        Create environment for processing datasets, which includes extracting
+        observations, labeling dense / sparse rewards, and annotating dones in
+        transitions.
+
+        Args:
+            env_name (str): name of environment
+            camera_names (list of str): list of camera names that correspond to image observations
+            camera_height (int): camera height for all cameras
+            camera_width (int): camera width for all cameras
+            reward_shaping (bool): if True, use shaped environment rewards, else use sparse task completion rewards
+        """
+        is_v1 = (robosuite.__version__.split(".")[0] == "1")
+        has_camera = (len(camera_names) > 0)
+
+        new_kwargs = {
+            "reward_shaping": reward_shaping,
+        }
+
+        if has_camera:
+            if is_v1:
+                new_kwargs["camera_names"] = list(camera_names)
+                new_kwargs["camera_heights"] = camera_height
+                new_kwargs["camera_widths"] = camera_width
+            else:
+                assert len(camera_names) == 1
+                if has_camera:
+                    new_kwargs["camera_name"] = camera_names[0]
+                    new_kwargs["camera_height"] = camera_height
+                    new_kwargs["camera_width"] = camera_width
+
+        kwargs.update(new_kwargs)
+
+        # also initialize obs utils so it knows which modalities are image modalities
+        image_modalities = list(camera_names)
+        if is_v1:
+            image_modalities = ["{}_image".format(cn) for cn in camera_names]
+            image_modalities += ["cur_{}_image".format(cn) for cn in camera_names]
+            image_modalities += ["goal_{}_image".format(cn) for cn in camera_names]
+        elif has_camera:
+            # v0.3 only had support for one image, and it was named "rgb"
+            assert len(image_modalities) == 1
+            image_modalities = ["rgb"]
+        obs_modality_specs = {
+            "obs": {
+                "low_dim": [],  # technically unused, so we don't have to specify all of them
+                "rgb": image_modalities,
+            }
+        }
+        ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs)
+
+        # note that @postprocess_visual_obs is False since this env's images will be written to a dataset
+        return cls(
+            env_name=env_name,
+            render=False,
+            render_offscreen=has_camera,
+            use_image_obs=has_camera,
+            postprocess_visual_obs=True,
+            **kwargs,
+        )
+
+    @property
+    def rollout_exceptions(self):
+        """
+        Return tuple of exceptions to except when doing rollouts. This is useful to ensure
+        that the entire training run doesn't crash because of a bad policy that causes unstable
+        simulation computations.
+        """
+        return (mujoco_py.builder.MujocoException)
+
+    def __repr__(self):
+        """
+        Pretty-print env description.
+        """
+        return self.name + "\n" + json.dumps(self._init_kwargs, sort_keys=True, indent=4)
+
+    @classmethod
+    def create_for_policy_evaluation(
+            cls,
+            env_name,
+            camera_names,
+            camera_height,
+            camera_width,
+            reward_shaping,
+            **kwargs,
+    ):
+        """
+        Create environment for processing datasets, which includes extracting
+        observations, labeling dense / sparse rewards, and annotating dones in
+        transitions.
+
+        Args:
+            env_name (str): name of environment
+            camera_names (list of str): list of camera names that correspond to image observations
+            camera_height (int): camera height for all cameras
+            camera_width (int): camera width for all cameras
+            reward_shaping (bool): if True, use shaped environment rewards, else use sparse task completion rewards
+        """
+        is_v1 = (robosuite.__version__.split(".")[0] == "1")
+        has_camera = (len(camera_names) > 0)
+
+        new_kwargs = {
+            "reward_shaping": reward_shaping,
+        }
+
+        if has_camera:
+            if is_v1:
+                new_kwargs["camera_names"] = list(camera_names)
+                new_kwargs["camera_heights"] = camera_height
+                new_kwargs["camera_widths"] = camera_width
+            else:
+                assert len(camera_names) == 1
+                if has_camera:
+                    new_kwargs["camera_name"] = camera_names[0]
+                    new_kwargs["camera_height"] = camera_height
+                    new_kwargs["camera_width"] = camera_width
+
+        kwargs.update(new_kwargs)
+
+        # also initialize obs utils so it knows which modalities are image modalities
+        image_modalities = list(camera_names)
+        if is_v1:
+            image_modalities = ["{}_image".format(cn) for cn in camera_names]
+        elif has_camera:
+            # v0.3 only had support for one image, and it was named "rgb"
+            assert len(image_modalities) == 1
+            image_modalities = ["rgb"]
+        obs_modality_specs = {
+            "obs": {
+                "low_dim": [],  # technically unused, so we don't have to specify all of them
+                "rgb": image_modalities,
+            }
+        }
+        ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs)
+
+        # note that @postprocess_visual_obs is False since this env's images will be written to a dataset
+        return cls(
+            env_name=env_name,
+            render=False,
+            render_offscreen=has_camera,
+            use_image_obs=has_camera,
+            postprocess_visual_obs=True,
             **kwargs,
         )
 

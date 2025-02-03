@@ -1,8 +1,8 @@
 {
     "algo_name": "bc",
     "experiment": {
-        "name": "test",
-        "validate": true,
+        "name": "idm_params_seed1",
+        "validate": false,
         "logging": {
             "terminal_output_to_txt": true,
             "log_tb": true
@@ -10,14 +10,14 @@
         "save": {
             "enabled": true,
             "every_n_seconds": null,
-            "every_n_epochs": 50,
+            "every_n_epochs": 20,
             "epochs": [],
             "on_best_validation": false,
             "on_best_rollout_return": false,
             "on_best_rollout_success_rate": true
         },
-        "epoch_every_n_steps": 100,
-        "validation_epoch_every_n_steps": 10,
+        "epoch_every_n_steps": 500,
+        "validation_epoch_every_n_steps": 50,
         "env": null,
         "additional_envs": null,
         "render": false,
@@ -25,32 +25,32 @@
         "keep_all_videos": false,
         "video_skip": 5,
         "rollout": {
-            "enabled": true,
+            "enabled": false,
             "n": 50,
-            "horizon": 400,
-            "rate": 50,
+            "horizon": 800,
+            "rate": 10,
             "warmstart": 0,
             "terminate_on_success": true
         }
     },
     "train": {
-        "data": null,
-        "output_dir": "../bc_trained_models",
-        "num_data_workers": 0,
-        "hdf5_cache_mode": "all",
+        "data": "../prime/data/rollout_data/PickPlaceMilk/idm_p_params_training_dataset.hdf5",
+        "output_dir": "../../prime/trained_models/PickPlaceMilk/idm_ckpts/params",
+        "num_data_workers": 2,
+        "hdf5_cache_mode": "low_dim",
         "hdf5_use_swmr": true,
         "hdf5_normalize_obs": false,
         "hdf5_filter_key": null,
         "seq_length": 1,
         "dataset_keys": [
             "actions",
-            "rewards",
-            "dones"
+            "action_masks"
         ],
         "goal_mode": null,
+        "reweight_data": true,
         "cuda": true,
-        "batch_size": 100,
-        "num_epochs": 2000,
+        "batch_size": 16,
+        "num_epochs": 600,
         "seed": 1
     },
     "algo": {
@@ -83,8 +83,12 @@
             "std_activation": "softplus",
             "low_noise_eval": true
         },
-        "gmm": {
+        "discrete": {
             "enabled": false,
+            "low_noise_eval": true
+        },
+        "gmm": {
+            "enabled": true,
             "num_modes": 5,
             "min_std": 0.0001,
             "std_activation": "softplus",
@@ -141,12 +145,20 @@
         "modalities": {
             "obs": {
                 "low_dim": [
-                    "robot0_eef_pos",
-                    "robot0_eef_quat",
-                    "robot0_gripper_qpos",
-                    "object"
+                    "cur_robot0_eef_pos",
+                    "cur_robot0_eef_quat",
+                    "cur_robot0_gripper_qpos",
+                    "goal_robot0_eef_pos",
+                    "goal_robot0_eef_quat",
+                    "goal_robot0_gripper_qpos",
+                    "primitive_type"
                 ],
-                "rgb": [],
+                "rgb": [
+                    "cur_agentview_image",
+                    "cur_robot0_eye_in_hand_image",
+                    "goal_agentview_image",
+                    "goal_robot0_eye_in_hand_image"
+                ],
                 "depth": [],
                 "scan": []
             },
@@ -160,7 +172,9 @@
         "encoder": {
             "low_dim": {
                 "core_class": null,
+                "feature_extractor": "mlp",
                 "core_kwargs": {},
+                "feature_kwargs": {},
                 "obs_randomizer_class": null,
                 "obs_randomizer_kwargs": {}
             },
@@ -183,7 +197,7 @@
                         "output_variance": false
                     }
                 },
-                "obs_randomizer_class": null,
+                "obs_randomizer_class": "CropRandomizer",
                 "obs_randomizer_kwargs": {
                     "crop_height": 76,
                     "crop_width": 76,

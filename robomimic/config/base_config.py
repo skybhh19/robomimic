@@ -119,6 +119,8 @@ class BaseConfig(Config):
         self.experiment.rollout.warmstart = 0                       # number of epochs to wait before starting rollouts
         self.experiment.rollout.terminate_on_success = True         # end rollout early after task success
 
+        self.experiment.ckpt_path = None
+
     def train_config(self):
         """
         This function populates the `config.train` attribute of the config, which 
@@ -170,11 +172,13 @@ class BaseConfig(Config):
             "actions", 
             "rewards", 
             "dones",
+            "action_masks",
         )
 
         # one of [None, "last"] - set to "last" to include goal observations in each batch
         self.train.goal_mode = None
 
+        self.train.reweight_data = False
 
         ## learning config ##
         self.train.cuda = True          # use GPU or not
@@ -226,7 +230,9 @@ class BaseConfig(Config):
 
         # =============== Low Dim default encoder (no encoder) ===============
         self.observation.encoder.low_dim.core_class = None
+        self.observation.encoder.low_dim.feature_extractor = None
         self.observation.encoder.low_dim.core_kwargs = Config()                 # No kwargs by default
+        self.observation.encoder.low_dim.feature_kwargs = Config()
         self.observation.encoder.low_dim.core_kwargs.do_not_lock_keys()
 
         # Low Dim: Obs Randomizer settings

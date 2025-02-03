@@ -141,7 +141,6 @@ def create_env(
         **kwargs,
     )
     print("Created environment with name {}".format(env_name))
-    print("Action size is {}".format(env.action_dimension))
     return env
 
 
@@ -238,5 +237,103 @@ def create_env_for_data_processing(
         camera_height=camera_height, 
         camera_width=camera_width, 
         reward_shaping=reward_shaping, 
+        **env_kwargs,
+    )
+
+def create_env_for_segmentation_evaluation(
+    env_meta,
+    camera_names,
+    camera_height,
+    camera_width,
+    reward_shaping,
+):
+    """
+    Creates environment for processing dataset observations and rewards.
+
+    Args:
+        env_meta (dict): environment metadata, which should be loaded from demonstration
+            hdf5 with @FileUtils.get_env_metadata_from_dataset or from checkpoint (see
+            @FileUtils.env_from_checkpoint). Contains 3 keys:
+
+                :`'env_name'`: name of environment
+                :`'type'`: type of environment, should be a value in EB.EnvType
+                :`'env_kwargs'`: dictionary of keyword arguments to pass to environment constructor
+
+        camera_names (list of st): list of camera names that correspond to image observations
+
+        camera_height (int): camera height for all cameras
+
+        camera_width (int): camera width for all cameras
+
+        reward_shaping (bool): if True, use shaped environment rewards, else use sparse task completion rewards
+    """
+    env_name = env_meta["env_name"]
+    env_type = get_env_type(env_meta=env_meta)
+    env_kwargs = env_meta["env_kwargs"]
+    env_class = get_env_class(env_type=env_type)
+
+    # remove possibly redundant values in kwargs
+    env_kwargs = deepcopy(env_kwargs)
+    env_kwargs.pop("env_name", None)
+    env_kwargs.pop("camera_names", None)
+    env_kwargs.pop("camera_height", None)
+    env_kwargs.pop("camera_width", None)
+    env_kwargs.pop("reward_shaping", None)
+
+    return env_class.create_for_segmentation_evaluation(
+        env_name=env_name,
+        camera_names=camera_names,
+        camera_height=camera_height,
+        camera_width=camera_width,
+        reward_shaping=reward_shaping,
+        **env_kwargs,
+    )
+
+def create_env_for_policy_evaluation(
+    env_meta,
+    camera_names,
+    camera_height,
+    camera_width,
+    reward_shaping,
+):
+    """
+    Creates environment for processing dataset observations and rewards.
+
+    Args:
+        env_meta (dict): environment metadata, which should be loaded from demonstration
+            hdf5 with @FileUtils.get_env_metadata_from_dataset or from checkpoint (see
+            @FileUtils.env_from_checkpoint). Contains 3 keys:
+
+                :`'env_name'`: name of environment
+                :`'type'`: type of environment, should be a value in EB.EnvType
+                :`'env_kwargs'`: dictionary of keyword arguments to pass to environment constructor
+
+        camera_names (list of st): list of camera names that correspond to image observations
+
+        camera_height (int): camera height for all cameras
+
+        camera_width (int): camera width for all cameras
+
+        reward_shaping (bool): if True, use shaped environment rewards, else use sparse task completion rewards
+    """
+    env_name = env_meta["env_name"]
+    env_type = get_env_type(env_meta=env_meta)
+    env_kwargs = env_meta["env_kwargs"]
+    env_class = get_env_class(env_type=env_type)
+
+    # remove possibly redundant values in kwargs
+    env_kwargs = deepcopy(env_kwargs)
+    env_kwargs.pop("env_name", None)
+    env_kwargs.pop("camera_names", None)
+    env_kwargs.pop("camera_height", None)
+    env_kwargs.pop("camera_width", None)
+    env_kwargs.pop("reward_shaping", None)
+
+    return env_class.create_for_policy_evaluation(
+        env_name=env_name,
+        camera_names=camera_names,
+        camera_height=camera_height,
+        camera_width=camera_width,
+        reward_shaping=reward_shaping,
         **env_kwargs,
     )

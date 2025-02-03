@@ -37,7 +37,10 @@ def algo_config_to_class(algo_config):
     gaussian_enabled = ("gaussian" in algo_config and algo_config.gaussian.enabled)
     gmm_enabled = ("gmm" in algo_config and algo_config.gmm.enabled)
     vae_enabled = ("vae" in algo_config and algo_config.vae.enabled)
+    is_discrete = ("discrete" in algo_config and algo_config.discrete.enabled)
 
+    if is_discrete:
+        return BC_DISCRETE, {}
     if algo_config.rnn.enabled:
         if gmm_enabled:
             return BC_RNN_GMM, {}
@@ -87,6 +90,9 @@ class BC(PolicyAlgo):
         input_batch["obs"] = {k: batch["obs"][k][:, 0, :] for k in batch["obs"]}
         input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
         input_batch["actions"] = batch["actions"][:, 0, :]
+        if "action_masks" in batch:
+            assert batch["actions"].shape == batch["action_masks"].shape
+            input_batch["action_masks"] = batch["action_masks"][:, 0, :]
         return TensorUtils.to_device(TensorUtils.to_float(input_batch), self.device)
 
     def train_on_batch(self, batch, epoch, validate=False):
@@ -106,17 +112,47 @@ class BC(PolicyAlgo):
             info (dict): dictionary of relevant inputs, outputs, and losses
                 that might be relevant for logging
         """
-        with TorchUtils.maybe_no_grad(no_grad=validate):
-            info = super(BC, self).train_on_batch(batch, epoch, validate=validate)
-            predictions = self._forward_training(batch)
-            losses = self._compute_losses(predictions, batch)
+        if self.optim_params["policy"]["optimizer"] == "SAM":
+            with TorchUtils.maybe_no_grad(no_grad=validate):
+                info = super(BC, self).train_on_batch(batch, epoch, validate=validate)
+                self.enable_running_stats(self.nets["policy"])
+                predictions = self._forward_training(batch)
+                losses = self._compute_losses(predictions, batch)
+                info["predictions"] = TensorUtils.detach(predictions)
+                info["losses"] = TensorUtils.detach(losses)
 
-            info["predictions"] = TensorUtils.detach(predictions)
-            info["losses"] = TensorUtils.detach(losses)
+                if not validate:
+                    self.optimizers["policy"].zero_grad()
+                    losses["action_loss"].backward(retain_graph=False)
+                    self.optimizers["policy"].first_step(zero_grad=True)
 
-            if not validate:
-                step_info = self._train_step(losses)
-                info.update(step_info)
+                    self.disable_running_stats(self.nets["policy"])
+                    predictions = self._forward_training(batch)
+                    losses = self._compute_losses(predictions, batch)
+                    info["predictions"] = TensorUtils.detach(predictions)
+                    info["losses"] = TensorUtils.detach(losses)
+
+                    self.optimizers["policy"].zero_grad()
+                    losses["action_loss"].backward(retain_graph=False)
+                    policy_grad_norms = 0.
+                    for p in self.nets["policy"].parameters():
+                        # only clip gradients for parameters for which requires_grad is True
+                        if p.grad is not None:
+                            policy_grad_norms += p.grad.data.norm(2).pow(2).item()
+                    self.optimizers["policy"].second_step(zero_grad=True)
+                    info["policy_grad_norms"] = policy_grad_norms
+        else:
+            with TorchUtils.maybe_no_grad(no_grad=validate):
+                info = super(BC, self).train_on_batch(batch, epoch, validate=validate)
+                predictions = self._forward_training(batch)
+                losses = self._compute_losses(predictions, batch)
+                info["predictions"] = TensorUtils.detach(predictions)
+                info["losses"] = TensorUtils.detach(losses)
+
+                if not validate:
+                    step_info = self._train_step(losses)
+                    info.update(step_info)
+
 
         return info
 
@@ -153,6 +189,9 @@ class BC(PolicyAlgo):
         losses = OrderedDict()
         a_target = batch["actions"]
         actions = predictions["actions"]
+        if "action_masks" in batch:
+            a_target = a_target * batch["action_masks"]
+            actions = actions * batch["action_masks"]
         losses["l2_loss"] = nn.MSELoss()(actions, a_target)
         losses["l1_loss"] = nn.SmoothL1Loss()(actions, a_target)
         # cosine direction loss on eef delta position
@@ -166,6 +205,21 @@ class BC(PolicyAlgo):
         action_loss = sum(action_losses)
         losses["action_loss"] = action_loss
         return losses
+
+    def disable_running_stats(self, model):
+        def _disable(module):
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                module.backup_momentum = module.momentum
+                module.momentum = 0
+
+        model.apply(_disable)
+
+    def enable_running_stats(self, model):
+        def _enable(module):
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm) and hasattr(module, "backup_momentum"):
+                module.momentum = module.backup_momentum
+
+        model.apply(_enable)
 
     def _train_step(self, losses):
         """
@@ -223,6 +277,110 @@ class BC(PolicyAlgo):
         assert not self.nets.training
         return self.nets["policy"](obs_dict, goal_dict=goal_dict)
 
+class BC_DISCRETE(BC):
+    """
+    BC training with a Gaussian policy.
+    """
+    def _create_networks(self):
+        """
+        Creates networks and places them into @self.nets.
+        """
+        assert self.algo_config.discrete.enabled
+
+        self.nets = nn.ModuleDict()
+        self.nets["policy"] = PolicyNets.CategoricalActorNetwork(
+            obs_shapes=self.obs_shapes,
+            goal_shapes=self.goal_shapes,
+            ac_dim=self.ac_dim,
+            mlp_layer_dims=self.algo_config.actor_layer_dims,
+            low_noise_eval=self.algo_config.gaussian.low_noise_eval,
+            encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
+        )
+
+        self.nets = self.nets.float().to(self.device)
+
+    def _forward_training(self, batch):
+        """
+        Internal helper function for BC algo class. Compute forward pass
+        and return network outputs in @predictions dict.
+
+        Args:
+            batch (dict): dictionary with torch.Tensors sampled
+                from a data loader and filtered by @process_batch_for_training
+
+        Returns:
+            predictions (dict): dictionary containing network outputs
+        """
+        dists = self.nets["policy"].forward_train(
+            obs_dict=batch["obs"],
+            goal_dict=batch["goal_obs"],
+        )
+
+        # make sure that this is a batch of multivariate action distributions, so that
+        # the log probability computation will be correct
+        assert len(dists.batch_shape) == 1
+        logits = dists.logits
+        pred_actions = dists.logits.argmax(dim=-1)
+
+        predictions = OrderedDict(
+            logits=logits,
+            pred_actions=pred_actions,
+        )
+        return predictions
+
+    def _compute_losses(self, predictions, batch):
+        """
+        Internal helper function for BC algo class. Compute losses based on
+        network outputs in @predictions dict, using reference labels in @batch.
+
+        Args:
+            predictions (dict): dictionary containing network outputs, from @_forward_training
+            batch (dict): dictionary with torch.Tensors sampled
+                from a data loader and filtered by @process_batch_for_training
+
+        Returns:
+            losses (dict): dictionary of losses computed over the batch
+        """
+
+        # loss is just negative log-likelihood of action targets
+        labels = torch.argmax(batch["actions"], dim=-1)
+        label_smooth_factor = self.algo_config.loss.label_smooth
+        if label_smooth_factor:
+            preds = predictions["logits"].log_softmax(dim=-1)
+            with torch.no_grad():
+                nclass = predictions["logits"].shape[-1]
+                targets = torch.zeros_like(predictions["logits"])
+                targets.fill_(label_smooth_factor / (nclass - 1))
+                targets.scatter_(1, labels.data.unsqueeze(1), 1. - label_smooth_factor)
+            action_loss = torch.mean(torch.sum(-targets * preds, dim=-1))
+        else:
+            action_loss = nn.CrossEntropyLoss(reduction='mean')\
+                (predictions["logits"].view(-1, predictions["logits"].size(-1)), labels.view(-1))
+        ntotal = len(labels)
+        ncorrect = (predictions["pred_actions"].view(-1) == labels.view(-1)).sum().item()
+        return OrderedDict(
+            action_loss=action_loss,
+            accuracy=torch.Tensor([ncorrect / ntotal]).to(action_loss.device)
+        )
+
+    def log_info(self, info):
+        """
+        Process info dictionary from @train_on_batch to summarize
+        information to pass to tensorboard for logging.
+
+        Args:
+            info (dict): dictionary of info
+
+        Returns:
+            loss_log (dict): name -> summary statistic
+        """
+        log = PolicyAlgo.log_info(self, info)
+        log["Loss"] = info["losses"]["action_loss"].item()
+        log["Accuracy"] = info["losses"]["accuracy"].item()
+        if "policy_grad_norms" in info:
+            log["Policy_Grad_Norms"] = info["policy_grad_norms"]
+        return log
+
 
 class BC_Gaussian(BC):
     """
@@ -265,12 +423,18 @@ class BC_Gaussian(BC):
         dists = self.nets["policy"].forward_train(
             obs_dict=batch["obs"], 
             goal_dict=batch["goal_obs"],
+            has_action_masks="action_masks" in batch,
         )
 
         # make sure that this is a batch of multivariate action distributions, so that
         # the log probability computation will be correct
-        assert len(dists.batch_shape) == 1
-        log_probs = dists.log_prob(batch["actions"])
+        if "action_masks" not in batch:
+            assert len(dists.batch_shape) == 1
+            log_probs = dists.log_prob(batch["actions"])
+        else:
+            log_probs = dists.base_dist.log_prob(batch["actions"])
+            assert len(dists.base_dist.batch_shape) == 2 and log_probs.shape == batch["action_masks"].shape
+            log_probs = (log_probs * batch["action_masks"]).sum(dim=-1)
 
         predictions = OrderedDict(
             log_probs=log_probs,
@@ -341,6 +505,47 @@ class BC_GMM(BC_Gaussian):
         )
 
         self.nets = self.nets.float().to(self.device)
+
+    def _forward_training(self, batch):
+        """
+        Internal helper function for BC algo class. Compute forward pass
+        and return network outputs in @predictions dict.
+
+        Args:
+            batch (dict): dictionary with torch.Tensors sampled
+                from a data loader and filtered by @process_batch_for_training
+
+        Returns:
+            predictions (dict): dictionary containing network outputs
+        """
+        dists = self.nets["policy"].forward_train(
+            obs_dict=batch["obs"],
+            goal_dict=batch["goal_obs"],
+            has_action_masks="action_masks" in batch,
+        )
+
+        # make sure that this is a batch of multivariate action distributions, so that
+        # the log probability computation will be correct
+        if "action_masks" not in batch:
+            assert len(dists.batch_shape) == 1
+            log_probs = dists.log_prob(batch["actions"])
+        else:
+            def get_GMM_probs_masked(dists, x, masks):
+                if dists._validate_args:
+                    dists._validate_sample(x)
+                x = dists._pad(x)
+                log_prob_x = dists.component_distribution.base_dist.log_prob(x)
+                masks = dists._pad(masks)
+                log_prob_x = (log_prob_x * masks).sum(dim=-1)
+                log_mix_prob = torch.log_softmax(dists.mixture_distribution.logits,
+                                                 dim=-1)  # [B, k]
+                return torch.logsumexp(log_prob_x + log_mix_prob, dim=-1)
+            log_probs = get_GMM_probs_masked(dists, batch["actions"], batch["action_masks"])
+
+        predictions = OrderedDict(
+            log_probs=log_probs,
+        )
+        return predictions
 
 
 class BC_VAE(BC):
@@ -495,6 +700,8 @@ class BC_RNN(BC):
         input_batch["obs"] = batch["obs"]
         input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
         input_batch["actions"] = batch["actions"]
+        if "action_masks" in input_batch:
+            input_batch["action_masks"] = batch["action_masks"]
 
         if self._rnn_is_open_loop:
             # replace the observation sequence with one that only consists of the first observation.
@@ -593,12 +800,28 @@ class BC_RNN_GMM(BC_RNN):
         dists = self.nets["policy"].forward_train(
             obs_dict=batch["obs"], 
             goal_dict=batch["goal_obs"],
+            has_action_masks="action_masks" in batch,
         )
 
         # make sure that this is a batch of multivariate action distributions, so that
         # the log probability computation will be correct
-        assert len(dists.batch_shape) == 2 # [B, T]
-        log_probs = dists.log_prob(batch["actions"])
+
+        if "action_masks" not in batch:
+            assert len(dists.batch_shape) == 2 # [B, T]
+            log_probs = dists.log_prob(batch["actions"])
+        else:
+            def get_GMM_probs_masked(dists, x, masks):
+                if dists._validate_args:
+                    dists._validate_sample(x)
+                x = dists._pad(x)
+                log_prob_x = dists.component_distribution.base_dist.log_prob(x)
+                masks = dists._pad(masks)
+                log_prob_x = (log_prob_x * masks).sum(dim=-1)
+                log_mix_prob = torch.log_softmax(dists.mixture_distribution.logits,
+                                                 dim=-1) * masks.max(dim=-1)[0] # [B, k]
+
+                return torch.logsumexp(log_prob_x + log_mix_prob, dim=-1)
+            log_probs = get_GMM_probs_masked(dists, batch["actions"], batch["action_masks"])
 
         predictions = OrderedDict(
             log_probs=log_probs,

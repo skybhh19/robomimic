@@ -113,6 +113,8 @@ class Algo(object):
             device (torch.Device): where the algo should live (i.e. cpu, gpu)
         """
         self.optim_params = deepcopy(algo_config.optim_params)
+        if len(self.optim_params["policy"]["optimizer"]) == 0:
+            self.optim_params["policy"]["optimizer"] = "Adam"
         self.algo_config = algo_config
         self.obs_config = obs_config
         self.global_config = global_config
@@ -279,6 +281,12 @@ class Algo(object):
         """
         self.nets.load_state_dict(model_dict)
 
+    def load_model_ckpt(self, ckpt_path):
+        from robomimic.utils.file_utils import maybe_dict_from_checkpoint
+        print("Reading model checkpoint from {}".format(ckpt_path))
+        ckpt_dict = maybe_dict_from_checkpoint(ckpt_path=ckpt_path)
+        self.deserialize(ckpt_dict["model"])
+
     def __repr__(self):
         """
         Pretty print algorithm and network description.
@@ -441,7 +449,7 @@ class RolloutPolicy(object):
         self.policy.set_eval()
         self.policy.reset()
 
-    def _prepare_observation(self, ob):
+    def _prepare_observation(self, ob, batch_input=False):
         """
         Prepare raw observation dict from environment for policy.
 
@@ -452,7 +460,8 @@ class RolloutPolicy(object):
         if self.obs_normalization_stats is not None:
             ob = ObsUtils.normalize_obs(ob, obs_normalization_stats=self.obs_normalization_stats)
         ob = TensorUtils.to_tensor(ob)
-        ob = TensorUtils.to_batch(ob)
+        if not batch_input:
+            ob = TensorUtils.to_batch(ob)
         ob = TensorUtils.to_device(ob, self.policy.device)
         ob = TensorUtils.to_float(ob)
         return ob
@@ -461,7 +470,7 @@ class RolloutPolicy(object):
         """Pretty print network description"""
         return self.policy.__repr__()
 
-    def __call__(self, ob, goal=None):
+    def __call__(self, ob, goal=None, ret_prob=False, batch_input=False):
         """
         Produce action from raw observation dict (and maybe goal dict) from environment.
 
@@ -470,8 +479,15 @@ class RolloutPolicy(object):
                 and np.array values for each key)
             goal (dict): goal observation
         """
-        ob = self._prepare_observation(ob)
+        ob = self._prepare_observation(ob, batch_input=batch_input)
         if goal is not None:
             goal = self._prepare_observation(goal)
+        if ret_prob:
+            ret = self.policy.get_action(obs_dict=ob, goal_dict=goal)
+            ac = ret['action']
+            prob = ret['prob']
+            if batch_input:
+                return TensorUtils.to_numpy(ac), TensorUtils.to_numpy(prob)
+            return TensorUtils.to_numpy(ac[0]), TensorUtils.to_numpy(prob[0])
         ac = self.policy.get_action(obs_dict=ob, goal_dict=goal)
         return TensorUtils.to_numpy(ac[0])

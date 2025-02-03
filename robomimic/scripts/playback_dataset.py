@@ -61,6 +61,7 @@ import h5py
 import argparse
 import imageio
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 import robomimic
 import robomimic.utils.obs_utils as ObsUtils
@@ -87,6 +88,7 @@ def playback_trajectory_with_env(
     video_skip=5, 
     camera_names=None,
     first=False,
+    ep_ind=None,
 ):
     """
     Helper function to playback a single trajectory using the simulator environment.
@@ -141,7 +143,12 @@ def playback_trajectory_with_env(
             if video_count % video_skip == 0:
                 video_img = []
                 for cam_name in camera_names:
-                    video_img.append(env.render(mode="rgb_array", height=512, width=512, camera_name=cam_name))
+                    img = env.render(mode="rgb_array", height=512, width=512, camera_name=cam_name)
+                    img = Image.fromarray(img, 'RGB')
+                    # draw = ImageDraw.Draw(img)
+                    # draw.text((50, 200), 'ep {} step {}'.format(ep_ind + 1, video_count), fill=(255, 0, 0))
+                    img = np.array(img)
+                    video_img.append(img)
                 video_img = np.concatenate(video_img, axis=1) # concatenate horizontally
                 video_writer.append_data(video_img)
             video_count += 1
@@ -156,6 +163,7 @@ def playback_trajectory_with_obs(
     video_skip=5, 
     image_names=None,
     first=False,
+    ep_ind=None,
 ):
     """
     This function reads all "rgb" observations in the dataset trajectory and
@@ -176,8 +184,17 @@ def playback_trajectory_with_obs(
     for i in range(traj_len):
         if video_count % video_skip == 0:
             # concatenate image obs together
-            im = [traj_grp["obs/{}".format(k)][i] for k in image_names]
-            frame = np.concatenate(im, axis=1)
+            video_imgs = []
+            for k in image_names:
+                im = traj_grp["obs/{}".format(k)][i]
+                im = Image.fromarray(im, 'RGB')
+                # draw = ImageDraw.Draw(im)
+                fontsize = 1
+                # font = ImageFont.truetype("arial.ttf", fontsize)
+                # draw.text((5, 40), 'ep {} step {}'.format(ep_ind + 1, video_count), fill=(255, 0, 0))
+                im = np.array(im)
+                video_imgs.append(im)
+            frame = np.concatenate(video_imgs, axis=1)
             video_writer.append_data(frame)
         video_count += 1
 
@@ -241,7 +258,7 @@ def playback_dataset(args):
     # maybe dump video
     video_writer = None
     if write_video:
-        video_writer = imageio.get_writer(args.video_path, fps=20)
+        video_writer = imageio.get_writer(args.video_path, fps=10)
 
     for ind in range(len(demos)):
         ep = demos[ind]
@@ -254,6 +271,7 @@ def playback_dataset(args):
                 video_skip=args.video_skip,
                 image_names=args.render_image_names,
                 first=args.first,
+                ep_ind=ind,
             )
             continue
 
@@ -277,6 +295,7 @@ def playback_dataset(args):
             video_skip=args.video_skip,
             camera_names=args.render_image_names,
             first=args.first,
+            ep_ind=ind
         )
 
     f.close()
@@ -358,6 +377,11 @@ if __name__ == "__main__":
         "--first",
         action='store_true',
         help="use first frame of each episode",
+    )
+
+    parser.add_argument(
+        "--write_step_index",
+        action='store_true',
     )
 
     args = parser.parse_args()

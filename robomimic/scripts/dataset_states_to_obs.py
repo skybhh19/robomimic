@@ -125,7 +125,6 @@ def extract_trajectory(
     # convert list of dict to dict of list for obs dictionaries (for convenient writes to hdf5 dataset)
     traj["obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["obs"])
     traj["next_obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["next_obs"])
-
     # list to numpy array
     for k in traj:
         if k == "initial_state_dict":

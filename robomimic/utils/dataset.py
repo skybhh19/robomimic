@@ -8,6 +8,7 @@ import numpy as np
 from copy import deepcopy
 from contextlib import contextmanager
 
+import torch
 import torch.utils.data
 
 import robomimic.utils.tensor_utils as TensorUtils
@@ -32,6 +33,7 @@ class SequenceDataset(torch.utils.data.Dataset):
         hdf5_normalize_obs=False,
         filter_by_attribute=None,
         load_next_obs=True,
+        reweight_data=False,
     ):
         """
         Dataset class for fetching sequences of experience.
@@ -151,7 +153,10 @@ class SequenceDataset(torch.utils.data.Dataset):
         else:
             self.hdf5_cache = None
 
+        self.reweight_data = reweight_data
+
         self.close_and_delete_hdf5_handle()
+
 
     def load_demo_info(self, filter_by_attribute=None, demos=None):
         """
@@ -245,12 +250,14 @@ class SequenceDataset(torch.utils.data.Dataset):
         msg += " (\n\tpath={}\n\tobs_keys={}\n\tseq_length={}\n\tfilter_key={}\n\tframe_stack={}\n"
         msg += "\tpad_seq_length={}\n\tpad_frame_stack={}\n\tgoal_mode={}\n"
         msg += "\tcache_mode={}\n"
+        msg += "\treweight_data={}\n"
         msg += "\tnum_demos={}\n\tnum_sequences={}\n)"
         filter_key_str = self.filter_by_attribute if self.filter_by_attribute is not None else "none"
         goal_mode_str = self.goal_mode if self.goal_mode is not None else "none"
         cache_mode_str = self.hdf5_cache_mode if self.hdf5_cache_mode is not None else "none"
         msg = msg.format(self.hdf5_path, self.obs_keys, self.seq_length, filter_key_str, self.n_frame_stack,
                          self.pad_seq_length, self.pad_frame_stack, goal_mode_str, cache_mode_str,
+                         self.reweight_data,
                          self.n_demos, self.total_num_sequences)
         return msg
 
@@ -408,7 +415,6 @@ class SequenceDataset(torch.utils.data.Dataset):
         """
         Main implementation of getitem when not using cache.
         """
-
         demo_id = self._index_to_demo_id[index]
         demo_start_index = self._demo_id_to_start_indices[demo_id]
         demo_length = self._demo_id_to_demo_length[demo_id]
@@ -610,4 +616,23 @@ class SequenceDataset(torch.utils.data.Dataset):
         See the `train` function in scripts/train.py, and torch
         `DataLoader` documentation, for more info.
         """
+        if self.reweight_data:
+            if "primitive_type" in self.get_item(0)['obs']:
+                sample_action = self.get_item(0)['obs']['primitive_type']
+            else:
+                sample_action = self.get_item(0)['actions']
+            assert len(sample_action.shape) == 2 and sample_action.shape[0] == 1
+            ac_dim = sample_action.shape[-1]
+            if "primitive_type" in self.get_item(0)['obs']:
+                data_labels = [np.argmax(self.get_item(idx)['obs']['primitive_type'], axis=-1).squeeze() for idx in range(self.total_num_sequences)]
+            else:
+                data_labels = [np.argmax(self.get_item(idx)['actions'], axis=-1).squeeze() for idx in range(self.total_num_sequences)]
+            data_type_sample_cnt = np.array([len(np.where(data_labels == t)[0]) for t in np.arange(ac_dim)])
+            data_weights = np.zeros(len(data_type_sample_cnt))
+            for _idx in range(len(data_type_sample_cnt)):
+                if data_type_sample_cnt[_idx] != 0:
+                    data_weights[_idx] = 1. / float(data_type_sample_cnt[_idx])
+            data_sample_weights = torch.from_numpy(np.array([data_weights[t] for t in data_labels]))
+            data_sampler = torch.utils.data.WeightedRandomSampler(data_sample_weights.type('torch.DoubleTensor'), num_samples=self.total_num_sequences)
+            return data_sampler
         return None

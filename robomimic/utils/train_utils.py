@@ -138,7 +138,7 @@ def dataset_factory(config, obs_keys, filter_by_attribute=None, dataset_path=Non
         hdf5_path=dataset_path,
         obs_keys=obs_keys,
         dataset_keys=config.train.dataset_keys,
-        load_next_obs=True, # make sure dataset returns s'
+        load_next_obs=False, # make sure dataset returns s'
         frame_stack=1, # no frame stacking
         seq_length=config.train.seq_length,
         pad_frame_stack=True,
@@ -148,7 +148,8 @@ def dataset_factory(config, obs_keys, filter_by_attribute=None, dataset_path=Non
         hdf5_cache_mode=config.train.hdf5_cache_mode,
         hdf5_use_swmr=config.train.hdf5_use_swmr,
         hdf5_normalize_obs=config.train.hdf5_normalize_obs,
-        filter_by_attribute=filter_by_attribute
+        filter_by_attribute=filter_by_attribute,
+        reweight_data=config.train.reweight_data,
     )
     dataset = SequenceDataset(**ds_kwargs)
 

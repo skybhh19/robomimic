@@ -57,6 +57,7 @@ import h5py
 import imageio
 import numpy as np
 from copy import deepcopy
+from tqdm import trange
 
 import torch
 
@@ -113,7 +114,16 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
         for step_i in range(horizon):
 
             # get action from policy
+            debug = False
+            if debug:
+                from PIL import Image
+                agentview_img_obs = ObsUtils.unprocess_obs_dict(obs)['robot0_eye_in_hand_image']
+                img = Image.fromarray(agentview_img_obs, 'RGB')
+                img.save('vis/tmp.png')
+                input("finish debugging")
+
             act = policy(ob=obs)
+
 
             # play action
             next_obs, r, done, _ = env.step(act)
@@ -229,7 +239,7 @@ def run_trained_agent(args):
         total_samples = 0
 
     rollout_stats = []
-    for i in range(rollout_num_episodes):
+    for i in trange(rollout_num_episodes):
         stats, traj = rollout(
             policy=policy, 
             env=env, 

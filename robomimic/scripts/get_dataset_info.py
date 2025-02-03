@@ -105,10 +105,13 @@ if __name__ == "__main__":
             for fk in all_filter_keys:
                 print("filter_key {} with {} demos: {}".format(fk, len(all_filter_keys[fk]), all_filter_keys[fk]))
         print("")
-    env_meta = json.loads(f["data"].attrs["env_args"])
-    print("==== Env Meta ====")
-    print(json.dumps(env_meta, indent=4))
-    print("")
+    if "env_args" in f["data"].attrs:
+        env_meta = json.loads(f["data"].attrs["env_args"])
+        print("==== Env Meta ====")
+        print(json.dumps(env_meta, indent=4))
+        print("")
+    else:
+        print("No env_args key")
 
     print("==== Dataset Structure ====")
     for ep in demos:

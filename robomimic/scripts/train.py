@@ -79,7 +79,7 @@ def train(config, device):
         verbose=True
     )
 
-    if config.experiment.env is not None:
+    if config.experiment.env is not None and "env_name" in env_meta:
         env_meta["env_name"] = config.experiment.env
         print("=" * 30 + "\n" + "Replacing Env to {}\n".format(env_meta["env_name"]) + "=" * 30)
 
@@ -122,6 +122,9 @@ def train(config, device):
     # save the config as a json file
     with open(os.path.join(log_dir, '..', 'config.json'), 'w') as outfile:
         json.dump(config, outfile, indent=4)
+
+    if config.experiment.ckpt_path is not None:
+        model.load_model_ckpt(config.experiment.ckpt_path)
 
     print("\n============= Model Summary =============")
     print(model)  # print model summary
@@ -307,7 +310,8 @@ def train(config, device):
 
 
 def main(args):
-
+    import robomimic.models.obs_nets as obs_nets
+    obs_nets.ATTENTION_FEATURES = args.attention
     if args.config is not None:
         ext_cfg = json.load(open(args.config, 'r'))
         config = config_factory(ext_cfg["algo_name"])
@@ -344,7 +348,7 @@ def main(args):
         config.experiment.rollout.horizon = 10
 
         # send output to a temporary directory
-        config.train.output_dir = "/tmp/tmp_trained_models"
+        config.train.output_dir = "~/tmp/tmp_trained_models"
 
     # lock config to prevent further modifications and ensure missing keys raise errors
     config.lock()
@@ -398,6 +402,12 @@ if __name__ == "__main__":
         "--debug",
         action='store_true',
         help="set this flag to run a quick training run for debugging purposes"
+    )
+
+    parser.add_argument(
+        "--attention",
+        type=str,
+        default=None
     )
 
     args = parser.parse_args()

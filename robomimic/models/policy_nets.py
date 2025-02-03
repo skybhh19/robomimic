@@ -189,6 +189,154 @@ class PerturbationActorNetwork(ActorNetwork):
         return "action_dim={}, perturbation_scale={}".format(self.ac_dim, self.perturbation_scale)
 
 
+class CategoricalActorNetwork(ActorNetwork):
+    """
+    Variant of actor network that learns a Categorical distribution
+    over actions.
+    """
+    def __init__(
+        self,
+        obs_shapes,
+        ac_dim,
+        mlp_layer_dims,
+        low_noise_eval=True,
+        goal_shapes=None,
+        encoder_kwargs=None,
+        **kwargs
+    ):
+        """
+        Args:
+            obs_shapes (OrderedDict): a dictionary that maps modality to
+                expected shapes for observations.
+
+            ac_dim (int): dimension of action space.
+
+            mlp_layer_dims ([int]): sequence of integers for the MLP hidden layers sizes.
+
+            fixed_std (bool): if True, std is not learned, but kept constant at @init_std
+
+            std_activation (None or str): type of activation to use for std deviation. Options are:
+
+                None: no activation applied (not recommended unless using fixed std)
+
+                `'softplus'`: Only applicable if not using fixed std. Softplus activation applied, after which the
+                    output is scaled by init_std / softplus(0)
+
+                `'exp'`: Only applicable if not using fixed std. Exp applied; this corresponds to network output
+                    as being interpreted as log_std instead of std
+
+                NOTE: In all cases, the final result is clipped to be within @std_limits
+
+            init_last_fc_weight (None or float): if specified, will intialize the final layer network weights to be
+                uniformly sampled from [-init_weight, init_weight]
+
+            init_std (None or float): approximate initial scaling for standard deviation outputs
+                from network. If None
+
+            mean_limits (2-array): (min, max) to clamp final mean output by
+
+            std_limits (2-array): (min, max) to clamp final std output by
+
+            low_noise_eval (float): if True, model will output means of Gaussian distribution
+                at eval time.
+
+            use_tanh (bool): if True, use a tanh-Gaussian distribution
+
+            goal_shapes (OrderedDict): a dictionary that maps modality to
+                expected shapes for goal observations.
+
+            encoder_kwargs (dict or None): If None, results in default encoder_kwargs being applied. Otherwise, should
+                be nested dictionary containing relevant per-modality information for encoder networks.
+                Should be of form:
+
+                obs_modality1: dict
+                    feature_dimension: int
+                    core_class: str
+                    core_kwargs: dict
+                        ...
+                        ...
+                    obs_randomizer_class: str
+                    obs_randomizer_kwargs: dict
+                        ...
+                        ...
+                obs_modality2: dict
+                    ...
+        """
+        self.low_noise_eval = low_noise_eval
+
+        super(CategoricalActorNetwork, self).__init__(
+            obs_shapes=obs_shapes,
+            ac_dim=ac_dim,
+            mlp_layer_dims=mlp_layer_dims,
+            goal_shapes=goal_shapes,
+            encoder_kwargs=encoder_kwargs,
+        )
+        # If initialization weight was specified, make sure all final layer network weights are specified correctly
+        # if init_last_fc_weight is not None:
+        #     with torch.no_grad():
+        #         for name, layer in self.nets["decoder"].nets.items():
+        #             torch.nn.init.uniform_(layer.weight, -init_last_fc_weight, init_last_fc_weight)
+        #             torch.nn.init.uniform_(layer.bias, -init_last_fc_weight, init_last_fc_weight)
+
+    def _get_output_shapes(self):
+        """
+        Tells @MIMO_MLP superclass about the output dictionary that should be generated
+        at the last layer. Network outputs parameters of Gaussian distribution.
+        """
+        return OrderedDict(
+            logit=(self.ac_dim,),
+        )
+
+    def forward_train(self, obs_dict, goal_dict=None, has_action_masks=False):
+        """
+        Return full Gaussian distribution, which is useful for computing
+        quantities necessary at train-time, like log-likelihood, KL
+        divergence, etc.
+
+        Args:
+            obs_dict (dict): batch of observations
+            goal_dict (dict): if not None, batch of goal observations
+
+        Returns:
+            dist (Distribution): Gaussian distribution
+        """
+        out = MIMO_MLP.forward(self, obs=obs_dict, goal=goal_dict)
+        logits = out["logit"]
+        dist = D.Categorical(logits=logits)
+
+        return dist
+
+    def forward(self, obs_dict, goal_dict=None):
+        """
+        Samples actions from the policy distribution.
+
+        Args:
+            obs_dict (dict): batch of observations
+            goal_dict (dict): if not None, batch of goal observations
+
+        Returns:
+            action (torch.Tensor): batch of actions from policy distribution
+        """
+        dist = self.forward_train(obs_dict, goal_dict)
+        assert self.low_noise_eval
+        if self.low_noise_eval and (not self.training):
+            action = dist.logits.argmax(dim=-1, keepdim=True)
+        else:
+            raise NotImplementedError
+        prob = torch.gather(dist.probs, 1, action)
+        return OrderedDict(
+            action=action,
+            prob=prob
+        )
+        # return action
+
+    def _to_string(self):
+        """Info to pretty print."""
+        msg = "action_dim={}\nlow_noise_eval={}".format(
+            self.ac_dim, self.low_noise_eval)
+        return msg
+
+
 class GaussianActorNetwork(ActorNetwork):
     """
     Variant of actor network that learns a diagonal unimodal Gaussian distribution
@@ -318,7 +466,7 @@ class GaussianActorNetwork(ActorNetwork):
             scale=(self.ac_dim,),
         )
 
-    def forward_train(self, obs_dict, goal_dict=None):
+    def forward_train(self, obs_dict, goal_dict=None, has_action_masks=False):
         """
         Return full Gaussian distribution, which is useful for computing
         quantities necessary at train-time, like log-likelihood, KL 
@@ -346,7 +494,7 @@ class GaussianActorNetwork(ActorNetwork):
         # Calculate scale
         if self.low_noise_eval and (not self.training):
             # override std value so that you always approximately sample the mean
-            scale = torch.ones_like(mean) * 1e-4
+            scale = torch.ones_like(mean) * 1e-8
         else:
             # Post-process the scale accordingly
             scale = self.activations[self.std_activation](scale)
@@ -358,6 +506,7 @@ class GaussianActorNetwork(ActorNetwork):
         # while `event_shape` will be equal to action dimension - ensuring that log-probability 
         # computations are summed across the action dimension
         dist = D.Normal(loc=mean, scale=scale)
+        # if not has_action_masks:
         dist = D.Independent(dist, 1)
 
         if self.use_tanh:
@@ -490,7 +639,7 @@ class GMMActorNetwork(ActorNetwork):
             logits=(self.num_modes,),
         )
 
-    def forward_train(self, obs_dict, goal_dict=None):
+    def forward_train(self, obs_dict, goal_dict=None, has_action_masks=False):
         """
         Return full GMM distribution, which is useful for computing
         quantities necessary at train-time, like log-likelihood, KL 
@@ -515,7 +664,7 @@ class GMMActorNetwork(ActorNetwork):
         # Calculate scale
         if self.low_noise_eval and (not self.training):
             # low-noise for all Gaussian dists
-            scales = torch.ones_like(means) * 1e-4
+            scales = torch.ones_like(means) * 1e-8
         else:
             # post-process the scale accordingly
             scales = self.activations[self.std_activation](scales) + self.min_std
@@ -524,7 +673,6 @@ class GMMActorNetwork(ActorNetwork):
         # to (batch_size, num_modes) since MixtureSameFamily expects this shape
         component_distribution = D.Normal(loc=means, scale=scales)
         component_distribution = D.Independent(component_distribution, 1)
-
         # unnormalized logits to categorical distribution for mixing the modes
         mixture_distribution = D.Categorical(logits=logits)
 
@@ -551,6 +699,8 @@ class GMMActorNetwork(ActorNetwork):
             action (torch.Tensor): batch of actions from policy distribution
         """
         dist = self.forward_train(obs_dict, goal_dict)
+        if self.low_noise_eval and (not self.training):
+            return dist.mean
         return dist.sample()
 
     def _to_string(self):
@@ -827,7 +977,7 @@ class RNNGMMActorNetwork(RNNActorNetwork):
             logits=(self.num_modes,),
         )
 
-    def forward_train(self, obs_dict, goal_dict=None, rnn_init_state=None, return_state=False):
+    def forward_train(self, obs_dict, goal_dict=None, rnn_init_state=None, return_state=False, has_action_masks=False):
         """
         Return full GMM distribution, which is useful for computing
         quantities necessary at train-time, like log-likelihood, KL 
@@ -875,6 +1025,7 @@ class RNNGMMActorNetwork(RNNActorNetwork):
         # mixture components - make sure that `batch_shape` for the distribution is equal
         # to (batch_size, timesteps, num_modes) since MixtureSameFamily expects this shape
         component_distribution = D.Normal(loc=means, scale=scales)
+        # if not has_action_masks:
         component_distribution = D.Independent(component_distribution, 1) # shift action dim to event shape
 
         # unnormalized logits to categorical distribution for mixing the modes
@@ -905,13 +1056,14 @@ class RNNGMMActorNetwork(RNNActorNetwork):
         Returns:
             action (torch.Tensor): batch of actions from policy distribution
         """
-        out = self.forward_train(obs_dict=obs_dict, goal_dict=goal_dict, rnn_init_state=rnn_init_state, return_state=return_state)
+        out = self.forward_train(obs_dict=obs_dict, goal_dict=goal_dict, rnn_init_state=rnn_init_state,
+                                 return_state=return_state)
         if return_state:
             ad, state = out
             return ad.sample(), state
         return out.sample()
 
-    def forward_train_step(self, obs_dict, goal_dict=None, rnn_state=None):
+    def forward_train_step(self, obs_dict, goal_dict=None, rnn_state=None, has_action_masks=False):
         """
         Unroll RNN over single timestep to get action GMM distribution, which 
         is useful for computing quantities necessary at train-time, like 
@@ -929,7 +1081,7 @@ class RNNGMMActorNetwork(RNNActorNetwork):
         """
         obs_dict = TensorUtils.to_sequence(obs_dict)
         ad, state = self.forward_train(
-            obs_dict, goal_dict, rnn_init_state=rnn_state, return_state=True)
+            obs_dict, goal_dict, rnn_init_state=rnn_state, return_state=True, has_action_masks=has_action_masks)
 
         # to squeeze time dimension, make another action distribution
         assert ad.component_distribution.base_dist.loc.shape[1] == 1
@@ -939,6 +1091,7 @@ class RNNGMMActorNetwork(RNNActorNetwork):
             loc=ad.component_distribution.base_dist.loc.squeeze(1),
             scale=ad.component_distribution.base_dist.scale.squeeze(1),
         )
+        # if not has_action_masks:
         component_distribution = D.Independent(component_distribution, 1)
         mixture_distribution = D.Categorical(logits=ad.mixture_distribution.logits.squeeze(1))
         ad = D.MixtureSameFamily(

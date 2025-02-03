@@ -20,12 +20,16 @@ class BCConfig(BaseConfig):
         self.algo.optim_params.policy.learning_rate.initial = 1e-4      # policy learning rate
         self.algo.optim_params.policy.learning_rate.decay_factor = 0.1  # factor to decay LR by (if epoch schedule non-empty)
         self.algo.optim_params.policy.learning_rate.epoch_schedule = [] # epochs where LR decay occurs
+        self.algo.optim_params.policy.learning_rate.cosine_annealing = False
+        self.algo.optim_params.policy.learning_rate.t_max = None
         self.algo.optim_params.policy.regularization.L2 = 0.00          # L2 regularization strength
+        self.algo.optim_params.policy.optimizer = "Adam"
 
         # loss weights
         self.algo.loss.l2_weight = 1.0      # L2 loss weight
         self.algo.loss.l1_weight = 0.0      # L1 loss weight
         self.algo.loss.cos_weight = 0.0     # cosine loss weight
+        self.algo.loss.label_smooth = 0.0
 
         # MLP network architecture (layers after observation encoder and RNN, if present)
         self.algo.actor_layer_dims = (1024, 1024)
@@ -37,6 +41,10 @@ class BCConfig(BaseConfig):
         self.algo.gaussian.min_std = 0.01               # minimum std output from network
         self.algo.gaussian.std_activation = "softplus"  # activation to use for std output from policy net
         self.algo.gaussian.low_noise_eval = True        # low-std at test-time 
+
+        # stochastic Categorical policy settings
+        self.algo.discrete.enabled = False
+        self.algo.discrete.low_noise_eval = True  # argmax
 
         # stochastic GMM policy settings
         self.algo.gmm.enabled = False                   # whether to train a GMM policy
