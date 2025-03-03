@@ -12,7 +12,7 @@ Args:
 
     dataset (str): if provided, override the dataset path defined in the config
 
-    debug (bool): set this flag to run a quick training run for debugging purposes
+    debug (bool): set this flag to run a quick training run for debugging purposes    
 """
 
 import argparse
@@ -79,7 +79,6 @@ def train(config, device):
     else:
         env_meta = dict()
     f.close()
-
     shape_meta = FileUtils.get_shape_metadata_from_dataset(
         dataset_path=config.train.data,
         all_obs_keys=config.all_obs_keys,
@@ -103,10 +102,10 @@ def train(config, device):
         for env_name in env_names:
             env = EnvUtils.create_env_from_metadata(
                 env_meta=env_meta,
-                env_name=env_name,
-                render=False,
+                env_name=env_name, 
+                render=False, 
                 render_offscreen=config.experiment.render_video,
-                use_image_obs=shape_meta["use_images"],
+                use_image_obs=shape_meta["use_images"], 
             )
             envs[env.name] = env
             print(envs[env.name])
@@ -125,7 +124,7 @@ def train(config, device):
         ac_dim=shape_meta["ac_dim"],
         device=device,
     )
-
+    
     # save the config as a json file
     with open(os.path.join(log_dir, '..', 'config.json'), 'w') as outfile:
         json.dump(config, outfile, indent=4)
@@ -185,7 +184,7 @@ def train(config, device):
     train_num_steps = config.experiment.epoch_every_n_steps
     valid_num_steps = config.experiment.validation_epoch_every_n_steps
 
-    for epoch in range(1, config.train.num_epochs + 1):  # epoch numbers start at 1
+    for epoch in range(1, config.train.num_epochs + 1): # epoch numbers start at 1
         step_log = TrainUtils.run_epoch(model=model, data_loader=train_loader, epoch=epoch, num_steps=train_num_steps)
         model.on_epoch_end(epoch)
 
@@ -196,9 +195,9 @@ def train(config, device):
         should_save_ckpt = False
         if config.experiment.save.enabled:
             time_check = (config.experiment.save.every_n_seconds is not None) and \
-                         (time.time() - last_ckpt_time > config.experiment.save.every_n_seconds)
+                (time.time() - last_ckpt_time > config.experiment.save.every_n_seconds)
             epoch_check = (config.experiment.save.every_n_epochs is not None) and \
-                          (epoch > 0) and (epoch % config.experiment.save.every_n_epochs == 0)
+                (epoch > 0) and (epoch % config.experiment.save.every_n_epochs == 0)
             epoch_list_check = (epoch in config.experiment.save.epochs)
             should_save_ckpt = (time_check or epoch_check or epoch_list_check)
         ckpt_reason = None
@@ -217,8 +216,7 @@ def train(config, device):
         # Evaluate the model on validation set
         if config.experiment.validate:
             with torch.no_grad():
-                step_log = TrainUtils.run_epoch(model=model, data_loader=valid_loader, epoch=epoch, validate=True,
-                                                num_steps=valid_num_steps)
+                step_log = TrainUtils.run_epoch(model=model, data_loader=valid_loader, epoch=epoch, validate=True, num_steps=valid_num_steps)
             for k, v in step_log.items():
                 if k.startswith("Time_"):
                     data_logger.record("Timing_Stats/Valid_{}".format(k[5:]), v, epoch)
@@ -286,8 +284,7 @@ def train(config, device):
             best_return = updated_stats["best_return"]
             best_success_rate = updated_stats["best_success_rate"]
             epoch_ckpt_name = updated_stats["epoch_ckpt_name"]
-            should_save_ckpt = (config.experiment.save.enabled and updated_stats[
-                "should_save_ckpt"]) or should_save_ckpt
+            should_save_ckpt = (config.experiment.save.enabled and updated_stats["should_save_ckpt"]) or should_save_ckpt
             if updated_stats["ckpt_reason"] is not None:
                 ckpt_reason = updated_stats["ckpt_reason"]
 
@@ -319,6 +316,7 @@ def train(config, device):
 
 
 def main(args):
+
     if args.config is not None:
         ext_cfg = json.load(open(args.config, 'r'))
         config = config_factory(ext_cfg["algo_name"])
