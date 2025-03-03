@@ -170,7 +170,6 @@
         "encoder": {
             "low_dim": {
                 "core_class": null,
-                "feature_extractor": "mlp",
                 "core_kwargs": {},
                 "feature_kwargs": {},
                 "obs_randomizer_class": null,

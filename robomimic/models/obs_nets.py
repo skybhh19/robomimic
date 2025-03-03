@@ -23,12 +23,8 @@ import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.obs_utils as ObsUtils
 from robomimic.models.base_nets import Module, Sequential, MLP, RNN_Base, ResNet18Conv, SpatialSoftmax, \
     FeatureAggregator, VisualCore, Randomizer
-from robomimic.models.feature_nets import SelfAttentionExtractor, MlpExtractor, SelfAttentionExtractor2, \
-    DeepSetExtractor, GoalConditionedSelfAttentionExtractor
 
-ATTENTION_FEATURES = None
-MAX_NUM_OBJS = 4
-NUM_PRIMITIVE_TYPE = 5
+
 def obs_encoder_factory(
         obs_shapes,
         feature_activation=nn.ReLU,
@@ -61,9 +57,7 @@ def obs_encoder_factory(
             obs_modality2: dict
                 ...
     """
-    enc = ObservationEncoder(feature_activation=feature_activation,
-                             feature_extractor=encoder_kwargs["low_dim"]["feature_extractor"],
-                             feature_kwargs=encoder_kwargs["low_dim"]["feature_kwargs"])
+    enc = ObservationEncoder(feature_activation=feature_activation)
     for k, obs_shape in obs_shapes.items():
         obs_modality = ObsUtils.OBS_KEYS_TO_MODALITIES[k]
         enc_kwargs = deepcopy(ObsUtils.DEFAULT_ENCODER_KWARGS[obs_modality]) if encoder_kwargs is None else \
@@ -107,7 +101,7 @@ class ObservationEncoder(Module):
     Call @register_obs_key to register observation keys with the encoder and then
     finally call @make to create the encoder networks. 
     """
-    def __init__(self, feature_activation=nn.ReLU, feature_extractor=None, feature_kwargs=None):
+    def __init__(self, feature_activation=nn.ReLU):
         """
         Args:
             feature_activation: non-linearity to apply after each obs net - defaults to ReLU. Pass
@@ -121,8 +115,6 @@ class ObservationEncoder(Module):
         self.obs_nets = nn.ModuleDict()
         self.obs_randomizers = nn.ModuleDict()
         self.feature_activation = feature_activation
-        self.feature_extractor = feature_extractor
-        self.feature_kwargs = feature_kwargs
         self._locked = False
 
     def register_obs_key(
@@ -193,7 +185,7 @@ class ObservationEncoder(Module):
         Creates all networks and layers required by this encoder using the registered modalities.
         """
         assert not self._locked, "ObservationEncoder: layers have already been created"
-        print(self.feature_extractor)
+
         for k in self.obs_shapes:
             if self.obs_nets_classes[k] is not None:
                 # create net to process this modality
@@ -201,37 +193,7 @@ class ObservationEncoder(Module):
             elif self.obs_share_mods[k] is not None:
                 # make sure net is shared with another modality
                 self.obs_nets[k] = self.obs_nets[self.obs_share_mods[k]]
-        if 'prior' in self.feature_extractor:
-            robot_dim = self.obs_shapes['cur_robot0_eef_pos'][-1] + self.obs_shapes['cur_robot0_eef_quat'][-1] + self.obs_shapes['cur_robot0_gripper_qpos'][-1]
-        elif 'policy' in self.feature_extractor:
-            robot_dim = self.obs_shapes['robot0_eef_pos'][-1] + self.obs_shapes['robot0_eef_quat'][-1] + \
-                        self.obs_shapes['robot0_gripper_qpos'][-1]
-        object_dim = 7
-        if self.feature_extractor in ['self_attention_prior', 'self_attention_policy', 'self_attention_policy_objectcentric',
-                                      'self_attention_ll', 'self_attention_ll_objectcentric']:
-            if 'objectcentric' in self.feature_extractor:
-                robot_dim += 3
-            self.feature_net = SelfAttentionExtractor(robot_dim, object_dim, hidden_size=self.feature_kwargs["hidden_size"],
-                                                       n_attention_blocks=self.feature_kwargs["n_attention_blocks"],
-                                                       n_heads=self.feature_kwargs["n_heads"])
-            print("self_attention")
-        elif self.feature_extractor in ['goal_self_attention_prior', 'goal_self_attention_prior_objectcentric']:
-            if 'objectcentric' in self.feature_extractor:
-                object_dim += 3
-            self.feature_net = GoalConditionedSelfAttentionExtractor(robot_dim, object_dim,
-                                                                     hidden_size=self.feature_kwargs["hidden_size"],
-                                                                     n_attention_blocks=self.feature_kwargs["n_attention_blocks"],
-                                                                     n_heads=self.feature_kwargs["n_heads"])
-        elif self.feature_extractor == 'deepset_prior':
-            self.feature_net = DeepSetExtractor(robot_dim, object_dim, hidden_size=self.feature_kwargs["hidden_size"])
-        elif self.feature_extractor in ['self_attention2_prior', 'self_attention2_policy', 'self_attention2_policy_objectcentric',
-                                        'self_attention2_ll', 'self_attention2_ll_objectcentric',
-                                        'self_attention_policy_objectcentric']:
-            if 'objectcentric' in self.feature_extractor:
-                robot_dim += 3
-            self.feature_net = SelfAttentionExtractor2(robot_dim, object_dim, hidden_size=self.feature_kwargs["hidden_size"],
-                                                       n_attention_blocks=self.feature_kwargs["n_attention_blocks"],
-                                                       n_heads=self.feature_kwargs["n_heads"], dropout_prob=0.0)
+
         self.activation = None
         if self.feature_activation is not None:
             self.activation = self.feature_activation()
@@ -261,103 +223,23 @@ class ObservationEncoder(Module):
 
         # process modalities by order given by @self.obs_shapes
         feats = []
-        if self.feature_extractor in ['self_attention_prior', 'goal_self_attention_prior', 'deepset_prior',
-                                      'self_attention2_prior', 'goal_self_attention_prior_objectcentric']:
-            feats.append(obs_dict['primitive_type'])
-            cur_robot_obs = torch.cat([obs_dict['cur_robot0_eef_pos'], obs_dict['cur_robot0_eef_quat'], obs_dict['cur_robot0_gripper_qpos']], dim=-1)
-            batch_size = obs_dict['cur_obj_pos'].shape[0]
-            cur_object_obs = torch.cat([obs_dict['cur_obj_pos'].reshape(batch_size, -1, 3),
-                                        obs_dict['cur_obj_quat'].reshape(batch_size, -1, 4),
-                                        # obs_dict['cur_obj_ind'].reshape(batch_size, -1, MAX_NUM_OBJS)
-                                        ], dim=-1)
-            goal_robot_obs = torch.cat(
-                [obs_dict['goal_robot0_eef_pos'], obs_dict['goal_robot0_eef_quat'], obs_dict['goal_robot0_gripper_qpos']],
-                dim=-1)
-            goal_object_obs = torch.cat([obs_dict['goal_obj_pos'].reshape(batch_size, -1, 3),
-                                         obs_dict['goal_obj_quat'].reshape(batch_size, -1, 4),
-                                         # obs_dict['goal_obj_ind'].reshape(batch_size, -1, MAX_NUM_OBJS)
-                                         ], dim=-1)
-            # if self.feature_extractor == 'mlp':
-            #     cur_obs = torch.cat([cur_robot_obs, obs_dict['cur_obj_pos'], obs_dict['cur_obj_quat'], obs_dict['cur_object_centric']], dim=-1)
-            #     goal_obs = torch.cat(
-            #         [goal_robot_obs, obs_dict['goal_obj_pos'], obs_dict['goal_obj_quat'], obs_dict['goal_object_centric']],
-            #         dim=-1)
-            #     feats.extend([self.feature_net(cur_obs), self.feature_net(goal_obs)])
-            # elif ATTENTION_FEATURES == 'self_attention':
-            if self.feature_extractor in ['self_attention_prior', 'self_attention2_prior']:
-                feats.append(self.feature_net1(cur_robot_obs, cur_object_obs))
-                feats.append(self.feature_net2(goal_robot_obs, goal_object_obs))
-            elif self.feature_extractor in ['goal_self_attention_prior', 'deepset_prior']:
-                feats.append(self.feature_net(cur_robot_obs, cur_object_obs, goal_robot_obs, goal_object_obs))
-            elif self.feature_extractor in ['goal_self_attention_prior_objectcentric']:
-                cur_object_obs = torch.cat([cur_object_obs,
-                                            obs_dict['cur_obj_pos'].reshape(batch_size, -1, 3)
-                                            - obs_dict['cur_robot0_eef_pos'].reshape(batch_size, 1, 3)], dim=-1)
-                goal_object_obs = torch.cat([goal_object_obs,
-                                             obs_dict['goal_obj_pos'].reshape(batch_size, -1, 3)
-                                             - obs_dict['goal_robot0_eef_pos'].reshape(batch_size, 1, 3)], dim=-1)
-                feats.append(self.feature_net(cur_robot_obs, cur_object_obs, goal_robot_obs, goal_object_obs))
-        elif self.feature_extractor in ['self_attention_policy', 'self_attention2_policy']:
-            feats.append(obs_dict['primitive_type'])
-            robot_obs = torch.cat(
-                [obs_dict['robot0_eef_pos'], obs_dict['robot0_eef_quat'], obs_dict['robot0_gripper_qpos']],
-                dim=-1)
-            batch_size = obs_dict['obj_pos'].shape[0]
-            object_obs = torch.cat([obs_dict['obj_pos'].reshape(batch_size, -1, 3),
-                                    obs_dict['obj_quat'].reshape(batch_size, -1, 4),
-                                    # obs_dict['obj_ind'].reshape(batch_size, -1, MAX_NUM_OBJS)
-                                    ], dim=-1)
-            feats.append(self.feature_net(robot_obs, object_obs))
-        elif self.feature_extractor in ['self_attention_ll', 'self_attention2_ll']:
-            robot_obs = torch.cat(
-                [obs_dict['robot0_eef_pos'], obs_dict['robot0_eef_quat'], obs_dict['robot0_gripper_qpos']],
-                dim=-1)
-            batch_size = obs_dict['obj_pos'].shape[0]
-            object_obs = torch.cat([obs_dict['obj_pos'].reshape(batch_size, -1, 3),
-                                    obs_dict['obj_quat'].reshape(batch_size, -1, 4),
-                                    # obs_dict['obj_ind'].reshape(batch_size, -1, MAX_NUM_OBJS)
-                                    ], dim=-1)
-            feats.append(self.feature_net(robot_obs, object_obs))
-        elif self.feature_extractor in ['self_attention_policy_objectcentric', 'self_attention2_policy_objectcentric']:
-            feats.append(obs_dict['primitive_type'])
-            robot_obs = torch.cat(
-                [obs_dict['robot0_eef_pos'], obs_dict['robot0_eef_quat'], obs_dict['robot0_gripper_qpos']],
-                dim=-1)
-            batch_size = obs_dict['obj_pos'].shape[0]
-            object_obs = torch.cat([obs_dict['obj_pos'].reshape(batch_size, -1, 3),
-                                    obs_dict['obj_quat'].reshape(batch_size, -1, 4),
-                                    # obs_dict['obj_ind'].reshape(batch_size, -1, MAX_NUM_OBJS),
-                                    obs_dict['obj_pos'].reshape(batch_size, -1, 3) - obs_dict['robot0_eef_pos'].reshape(batch_size, 1, 3)], dim=-1)
-            feats.append(self.feature_net(robot_obs, object_obs))
-        elif self.feature_extractor in ['self_attention_ll_objectcentric', 'self_attention2_ll_objectcentric']:
-            robot_obs = torch.cat(
-                [obs_dict['robot0_eef_pos'], obs_dict['robot0_eef_quat'], obs_dict['robot0_gripper_qpos']],
-                dim=-1)
-            batch_size = obs_dict['obj_pos'].shape[0]
-            object_obs = torch.cat([obs_dict['obj_pos'].reshape(batch_size, -1, 3),
-                                    obs_dict['obj_quat'].reshape(batch_size, -1, 4),
-                                    # obs_dict['obj_ind'].reshape(batch_size, -1, MAX_NUM_OBJS),
-                                    obs_dict['obj_pos'].reshape(batch_size, -1, 3) - obs_dict['robot0_eef_pos'].reshape(batch_size, 1, 3)], dim=-1)
-            feats.append(self.feature_net(robot_obs, object_obs))
-        elif self.feature_extractor == 'mlp':
-            for k in self.obs_shapes:
-                x = obs_dict[k]
-                # maybe process encoder input with randomizer
-                if self.obs_randomizers[k] is not None:
-                    x = self.obs_randomizers[k].forward_in(x)
-                # maybe process with obs net
-                if self.obs_nets[k] is not None:
-                    x = self.obs_nets[k](x)
-                    if self.activation is not None:
-                        x = self.activation(x)
-                # maybe process encoder output with randomizer
-                if self.obs_randomizers[k] is not None:
-                    x = self.obs_randomizers[k].forward_out(x)
-                # flatten to [B, D]
-                x = TensorUtils.flatten(x, begin_axis=1)
-                feats.append(x)
-        else:
-            raise NotImplementedError
+        for k in self.obs_shapes:
+            x = obs_dict[k]
+            # maybe process encoder input with randomizer
+            if self.obs_randomizers[k] is not None:
+                x = self.obs_randomizers[k].forward_in(x)
+            # maybe process with obs net
+            if self.obs_nets[k] is not None:
+                x = self.obs_nets[k](x)
+                if self.activation is not None:
+                    x = self.activation(x)
+            # maybe process encoder output with randomizer
+            if self.obs_randomizers[k] is not None:
+                x = self.obs_randomizers[k].forward_out(x)
+            # flatten to [B, D]
+            x = TensorUtils.flatten(x, begin_axis=1)
+            feats.append(x)
+
         # concatenate all features together
         return torch.cat(feats, dim=-1)
 
@@ -365,29 +247,17 @@ class ObservationEncoder(Module):
         """
         Compute the output shape of the encoder.
         """
-        if self.feature_extractor in ['self_attention_prior', 'self_attention2_prior']:
-            return [self.feature_net.hidden_size * 2 + NUM_PRIMITIVE_TYPE]
-        elif self.feature_extractor in ['goal_self_attention_prior', 'goal_self_attention_prior_objectcentric',
-                                        'deepset_prior', 'self_attention_policy', 'self_attention2_policy',
-                                        'self_attention2_policy_objectcentric', 'self_attention_policy_objectcentric']:
-            return [self.feature_net.hidden_size + NUM_PRIMITIVE_TYPE]
-        elif self.feature_extractor in ['self_attention_ll', 'self_attention2_ll', 'self_attention_ll_objectcentric',
-                                        'self_attention2_ll_objectcentric']:
-            return [self.feature_net.hidden_size]
-        elif self.feature_extractor == 'mlp':
-            feat_dim = 0
-            for k in self.obs_shapes:
-                feat_shape = self.obs_shapes[k]
-                if self.obs_randomizers[k] is not None:
-                    feat_shape = self.obs_randomizers[k].output_shape_in(feat_shape)
-                if self.obs_nets[k] is not None:
-                    feat_shape = self.obs_nets[k].output_shape(feat_shape)
-                if self.obs_randomizers[k] is not None:
-                    feat_shape = self.obs_randomizers[k].output_shape_out(feat_shape)
-                feat_dim += int(np.prod(feat_shape))
-            return [feat_dim]
-        else:
-            raise NotImplementedError
+        feat_dim = 0
+        for k in self.obs_shapes:
+            feat_shape = self.obs_shapes[k]
+            if self.obs_randomizers[k] is not None:
+                feat_shape = self.obs_randomizers[k].output_shape_in(feat_shape)
+            if self.obs_nets[k] is not None:
+                feat_shape = self.obs_nets[k].output_shape(feat_shape)
+            if self.obs_randomizers[k] is not None:
+                feat_shape = self.obs_randomizers[k].output_shape_out(feat_shape)
+            feat_dim += int(np.prod(feat_shape))
+        return [feat_dim]
 
     def __repr__(self):
         """
@@ -681,6 +551,7 @@ class MIMO_MLP(Module):
             activation=activation,
             output_activation=activation, # make sure non-linearity is applied before decoder
         )
+
         # decoder for output modalities
         self.nets["decoder"] = ObservationDecoder(
             decode_shapes=self.output_shapes,

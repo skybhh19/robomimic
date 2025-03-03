@@ -113,8 +113,6 @@ class Algo(object):
             device (torch.Device): where the algo should live (i.e. cpu, gpu)
         """
         self.optim_params = deepcopy(algo_config.optim_params)
-        if len(self.optim_params["policy"]["optimizer"]) == 0:
-            self.optim_params["policy"]["optimizer"] = "Adam"
         self.algo_config = algo_config
         self.obs_config = obs_config
         self.global_config = global_config

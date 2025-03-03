@@ -279,7 +279,7 @@ class BC(PolicyAlgo):
 
 class BC_DISCRETE(BC):
     """
-    BC training with a Gaussian policy.
+    BC training with a Categorical policy.
     """
     def _create_networks(self):
         """

@@ -230,9 +230,7 @@ class BaseConfig(Config):
 
         # =============== Low Dim default encoder (no encoder) ===============
         self.observation.encoder.low_dim.core_class = None
-        self.observation.encoder.low_dim.feature_extractor = None
         self.observation.encoder.low_dim.core_kwargs = Config()                 # No kwargs by default
-        self.observation.encoder.low_dim.feature_kwargs = Config()
         self.observation.encoder.low_dim.core_kwargs.do_not_lock_keys()
 
         # Low Dim: Obs Randomizer settings

@@ -207,9 +207,9 @@ def initialize_obs_utils_with_obs_specs(obs_modality_specs):
     # remove duplicate entries and store in global mapping
     OBS_MODALITIES_TO_KEYS = { obs_modality : list(set(obs_modality_mapping[obs_modality])) for obs_modality in obs_modality_mapping }
 
-    # print("\n============= Initialized Observation Utils with Obs Spec =============\n")
-    # for obs_modality, obs_keys in OBS_MODALITIES_TO_KEYS.items():
-    #     print("using obs modality: {} with keys: {}".format(obs_modality, obs_keys))
+    print("\n============= Initialized Observation Utils with Obs Spec =============\n")
+    for obs_modality, obs_keys in OBS_MODALITIES_TO_KEYS.items():
+        print("using obs modality: {} with keys: {}".format(obs_modality, obs_keys))
 
 
 def initialize_default_obs_encoder(obs_encoder_config):
@@ -686,6 +686,7 @@ def sample_random_image_crops(images, crop_height, crop_width, num_crops, pos_en
     crop_inds_h = (max_sample_h * torch.rand(*source_im.shape[:-3], num_crops).to(device)).long()
     crop_inds_w = (max_sample_w * torch.rand(*source_im.shape[:-3], num_crops).to(device)).long()
     crop_inds = torch.cat((crop_inds_h.unsqueeze(-1), crop_inds_w.unsqueeze(-1)), dim=-1) # shape [..., N, 2]
+
     crops = crop_image_from_indices(
         images=source_im, 
         crop_indices=crop_inds, 

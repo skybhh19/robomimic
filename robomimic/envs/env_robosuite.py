@@ -22,7 +22,7 @@ class EnvRobosuite(EB.EnvBase):
         env_name, 
         render=False, 
         render_offscreen=False, 
-        use_image_obs=False, 
+        use_image_obs=False,
         postprocess_visual_obs=True,
         **kwargs,
     ):
@@ -48,8 +48,8 @@ class EnvRobosuite(EB.EnvBase):
 
         # robosuite version check
         self._is_v1 = (robosuite.__version__.split(".")[0] == "1")
-        # if self._is_v1:
-        #     assert (int(robosuite.__version__.split(".")[1]) >= 2), "only support robosuite v0.3 and v1.2+"
+        if self._is_v1:
+            assert (int(robosuite.__version__.split(".")[1]) >= 2), "only support robosuite v0.3 and v1.2+"
 
         kwargs = deepcopy(kwargs)
 
@@ -88,7 +88,7 @@ class EnvRobosuite(EB.EnvBase):
                 if ("joint_pos" in ob_name) or ("eef_vel" in ob_name):
                     self.env.modify_observable(observable_name=ob_name, attribute="active", modifier=True)
 
-    def step(self, action, **kwargs):
+    def step(self, action):
         """
         Step in the environment with an action.
 
@@ -101,7 +101,7 @@ class EnvRobosuite(EB.EnvBase):
             done (bool): whether the task is done
             info (dict): extra information
         """
-        obs, r, done, info = self.env.step(action, **kwargs)
+        obs, r, done, info = self.env.step(action)
         obs = self.get_observation(obs)
         return obs, r, self.is_done(), info
 
@@ -129,7 +129,6 @@ class EnvRobosuite(EB.EnvBase):
                 if "states" is in @state)
         """
         should_ret = False
-        assert "states" in state
         if "model" in state:
             self.reset()
             xml = postprocess_model_xml(state["model"])
@@ -189,19 +188,6 @@ class EnvRobosuite(EB.EnvBase):
 
         # "object" key contains object information
         ret["object"] = np.array(di["object-state"])
-        try:
-            ret["object_centric"] = np.array(di["object_centric"])
-        except:
-            pass
-        try:
-            ret["obj_pos"] = np.array(di["obj_pos"])
-            ret["obj_quat"] = np.array(di["obj_quat"])
-        except:
-            pass
-        try:
-            ret["obj_ind"] = np.array(di["obj_ind"])
-        except:
-            pass
 
         if self._is_v1:
             for robot in self.env.robots:
