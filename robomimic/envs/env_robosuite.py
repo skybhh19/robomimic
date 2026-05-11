@@ -110,6 +110,33 @@ class EnvRobosuite(EB.EnvBase):
             del kwargs["camera_depths"]
             kwargs["camera_depth"] = use_depth_obs # rename kwarg
 
+        if self.is_v15_or_higher and "controller_configs" in kwargs:
+            from robosuite.controllers.composite.composite_controller_factory import (
+                refactor_composite_controller_config,
+            )
+            from robosuite.models.robots.robot_model import REGISTERED_ROBOTS
+
+            robots = kwargs.get("robots", [])
+            if isinstance(robots, str):
+                robots = [robots]
+            controller_configs = kwargs["controller_configs"]
+
+            def get_arms(robot):
+                return REGISTERED_ROBOTS[robot].arms if robot in REGISTERED_ROBOTS else ["right"]
+
+            if isinstance(controller_configs, list):
+                kwargs["controller_configs"] = [
+                    refactor_composite_controller_config(config, robot_type=robot, arms=get_arms(robot))
+                    for config, robot in zip(controller_configs, robots)
+                ]
+            else:
+                robot = robots[0] if len(robots) > 0 else None
+                kwargs["controller_configs"] = refactor_composite_controller_config(
+                    controller_configs,
+                    robot_type=robot,
+                    arms=get_arms(robot),
+                )
+
         self._env_name = env_name
 
         self._init_kwargs = deepcopy(kwargs)

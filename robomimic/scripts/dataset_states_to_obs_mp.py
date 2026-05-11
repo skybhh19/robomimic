@@ -83,10 +83,13 @@ import shutil  # For getting terminal size
 
 import robomimic.macros as Macros
 import robomimic.utils.tensor_utils as TensorUtils
-import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 from robomimic.envs.env_base import EnvBase
-from robomimic.scripts.dataset_states_to_obs import extract_trajectory, get_camera_info
+from robomimic.scripts.dataset_states_to_obs import (
+    extract_trajectory,
+    get_camera_info,
+    get_env_metadata_from_dataset,
+)
 
 try:
     import mimicgen
@@ -151,8 +154,14 @@ def process_demo_batch(process_id, args, env_meta, work_queue, result_queue, pro
             
             # prepare states to reload from
             is_robosuite_env = EnvUtils.is_robosuite_env(env_meta)
-            is_simpler_env = EnvUtils.is_simpler_env(env_meta) or EnvUtils.is_simpler_ov_env(env_meta)
-            is_factory_env = EnvUtils.is_factory_env(env_meta) or EnvUtils.is_furniture_sim_env(env_meta)
+            is_simpler_env = (
+                getattr(EnvUtils, "is_simpler_env", lambda *_, **__: False)(env_meta)
+                or getattr(EnvUtils, "is_simpler_ov_env", lambda *_, **__: False)(env_meta)
+            )
+            is_factory_env = (
+                getattr(EnvUtils, "is_factory_env", lambda *_, **__: False)(env_meta)
+                or getattr(EnvUtils, "is_furniture_sim_env", lambda *_, **__: False)(env_meta)
+            )
 
             if is_simpler_env or is_factory_env:
                 # states are dictionaries - make list of dictionaries
@@ -174,20 +183,22 @@ def process_demo_batch(process_id, args, env_meta, work_queue, result_queue, pro
 
             # extract obs, rewards, dones
             actions = f["data/{}/actions".format(ep)][()]
-            actions_abs = f["data/{}/actions_abs".format(ep)][()]
-            traj, is_success, camera_info = extract_trajectory(
+            if "data/{}/actions_abs".format(ep) in f:
+                actions_abs = f["data/{}/actions_abs".format(ep)][()]
+            else:
+                actions_abs = None
+            traj, camera_info = extract_trajectory(
                 env=env, 
                 initial_state=initial_state, 
                 states=states, 
                 actions=actions,
                 actions_abs=actions_abs,
                 done_mode=args.done_mode,
-                use_actions=args.use_actions,
                 camera_names=args.camera_names, 
                 camera_height=args.camera_height, 
                 camera_width=args.camera_width,
             )
-            num_success += int(is_success)
+            num_success += int(np.any(traj["dones"]))
 
             # maybe copy reward or done signal from source file
             if args.copy_rewards:
@@ -200,7 +211,8 @@ def process_demo_batch(process_id, args, env_meta, work_queue, result_queue, pro
             #            consistent as well
             ep_data_grp = data_grp.create_group(ep)
             ep_data_grp.create_dataset("actions", data=np.array(traj["actions"]))
-            ep_data_grp.create_dataset("actions_abs", data=np.array(traj["actions_abs"]))
+            if "actions_abs" in traj:
+                ep_data_grp.create_dataset("actions_abs", data=np.array(traj["actions_abs"]))
             if is_simpler_env or is_factory_env:
                 for k in traj["states"]:
                     ep_data_grp.create_dataset("states/{}".format(k), data=np.array(traj["states"][k]))
@@ -308,7 +320,7 @@ def dataset_states_to_obs_mp(args):
         assert len(args.camera_names) > 0, "must specify camera names if using depth"
 
     # Get environment metadata
-    env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path=args.dataset)
+    env_meta = get_env_metadata_from_dataset(dataset_path=args.dataset)
 
     # Read demonstrations and sort them
     with h5py.File(args.dataset, "r") as f:
@@ -669,7 +681,7 @@ if __name__ == "__main__":
         print(res_str)
 
     # maybe give slack notification
-    if Macros.SLACK_TOKEN is not None and (not args.no_slack):
+    if getattr(Macros, "SLACK_TOKEN", None) is not None and (not args.no_slack):
         from robomimic.scripts.give_slack_notification import give_slack_notif
         msg = "Completed the following dataset extraction run!\nHostname: {}\n".format(socket.gethostname())
         msg += "```{}```".format(res_str)

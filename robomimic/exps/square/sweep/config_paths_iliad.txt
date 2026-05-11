@@ -1,0 +1,2 @@
+robomimic/exps/square/sweep/mh_left_low_close/discrete_gaussian/wd0.json
+robomimic/exps/square/sweep/mh_left_low_close/discrete_gaussian/wd1em04.json

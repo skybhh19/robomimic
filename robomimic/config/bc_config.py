@@ -40,6 +40,14 @@ class BCConfig(BaseConfig):
         # MLP network architecture (layers after observation encoder and RNN, if present)
         self.algo.actor_layer_dims = (1024, 1024)
 
+        # discretized action policy settings
+        self.algo.discrete.enabled = False              # whether to train a discretized action policy
+        self.algo.discrete.num_bins = 256               # number of bins per action dimension
+        self.algo.discrete.target_type = "one_hot"      # target type: one_hot or gaussian
+        self.algo.discrete.target_sigma_bins = 2.0      # gaussian target std, in bin widths
+        self.algo.discrete.action_min = -1.0            # minimum action value to discretize
+        self.algo.discrete.action_max = 1.0             # maximum action value to discretize
+
         # stochastic Gaussian policy settings
         self.algo.gaussian.enabled = False              # whether to train a Gaussian policy
         self.algo.gaussian.fixed_std = False            # whether to train std output or keep it constant

@@ -111,6 +111,59 @@ class ActorNetwork(MIMO_MLP):
         return "action_dim={}".format(self.ac_dim)
 
 
+class DiscreteActorNetwork(ActorNetwork):
+    """
+    A policy network that predicts independent categorical logits over bins for
+    each action dimension, and returns bin-center actions at eval time.
+    """
+    def __init__(
+        self,
+        obs_shapes,
+        ac_dim,
+        mlp_layer_dims,
+        num_bins,
+        action_min=-1.0,
+        action_max=1.0,
+        goal_shapes=None,
+        encoder_kwargs=None,
+    ):
+        assert num_bins >= 2
+        assert action_max > action_min
+        self.num_bins = num_bins
+        self.action_min = action_min
+        self.action_max = action_max
+        super(DiscreteActorNetwork, self).__init__(
+            obs_shapes=obs_shapes,
+            ac_dim=ac_dim,
+            mlp_layer_dims=mlp_layer_dims,
+            goal_shapes=goal_shapes,
+            encoder_kwargs=encoder_kwargs,
+        )
+
+    def _get_output_shapes(self):
+        return OrderedDict(action_logits=(self.ac_dim, self.num_bins))
+
+    def output_shape(self, input_shape=None):
+        return [self.ac_dim]
+
+    def forward_train(self, obs_dict, goal_dict=None):
+        return MIMO_MLP.forward(self, obs=obs_dict, goal=goal_dict)["action_logits"]
+
+    def indices_to_actions(self, indices):
+        indices = indices.to(dtype=torch.float32)
+        scale = (self.action_max - self.action_min) / float(self.num_bins - 1)
+        return self.action_min + scale * indices
+
+    def forward(self, obs_dict, goal_dict=None):
+        logits = self.forward_train(obs_dict=obs_dict, goal_dict=goal_dict)
+        action_indices = logits.argmax(dim=-1)
+        return self.indices_to_actions(action_indices)
+
+    def _to_string(self):
+        return "action_dim={}\nnum_bins={}\naction_min={}\naction_max={}".format(
+            self.ac_dim, self.num_bins, self.action_min, self.action_max)
+
+
 class PerturbationActorNetwork(ActorNetwork):
     """
     An action perturbation network - primarily used in BCQ.
@@ -319,7 +372,7 @@ class GaussianActorNetwork(ActorNetwork):
             scale=(self.ac_dim,),
         )
 
-    def forward_train(self, obs_dict, goal_dict=None):
+    def forward_train(self, obs_dict, goal_dict=None, low_noise_eval=None):
         """
         Return full Gaussian distribution, which is useful for computing
         quantities necessary at train-time, like log-likelihood, KL 
@@ -345,7 +398,9 @@ class GaussianActorNetwork(ActorNetwork):
             mean = torch.tanh(mean)
 
         # Calculate scale
-        if self.low_noise_eval and (not self.training):
+        if low_noise_eval is None:
+            low_noise_eval = self.low_noise_eval
+        if low_noise_eval and (not self.training):
             # override std value so that you always approximately sample the mean
             scale = torch.ones_like(mean) * 1e-4
         else:
@@ -491,7 +546,7 @@ class GMMActorNetwork(ActorNetwork):
             logits=(self.num_modes,),
         )
 
-    def forward_train(self, obs_dict, goal_dict=None):
+    def forward_train(self, obs_dict, goal_dict=None, low_noise_eval=None):
         """
         Return full GMM distribution, which is useful for computing
         quantities necessary at train-time, like log-likelihood, KL 
@@ -514,7 +569,9 @@ class GMMActorNetwork(ActorNetwork):
             means = torch.tanh(means)
 
         # Calculate scale
-        if self.low_noise_eval and (not self.training):
+        if low_noise_eval is None:
+            low_noise_eval = self.low_noise_eval
+        if low_noise_eval and (not self.training):
             # low-noise for all Gaussian dists
             scales = torch.ones_like(means) * 1e-4
         else:
@@ -828,7 +885,7 @@ class RNNGMMActorNetwork(RNNActorNetwork):
             logits=(self.num_modes,),
         )
 
-    def forward_train(self, obs_dict, goal_dict=None, rnn_init_state=None, return_state=False):
+    def forward_train(self, obs_dict, goal_dict=None, rnn_init_state=None, return_state=False, low_noise_eval=None):
         """
         Return full GMM distribution, which is useful for computing
         quantities necessary at train-time, like log-likelihood, KL 
@@ -866,7 +923,9 @@ class RNNGMMActorNetwork(RNNActorNetwork):
         if not self.use_tanh:
             means = torch.tanh(means)
 
-        if self.low_noise_eval and (not self.training):
+        if low_noise_eval is None:
+            low_noise_eval = self.low_noise_eval
+        if low_noise_eval and (not self.training):
             # low-noise for all Gaussian dists
             scales = torch.ones_like(means) * 1e-4
         else:

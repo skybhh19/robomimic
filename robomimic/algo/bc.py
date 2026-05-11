@@ -38,12 +38,20 @@ def algo_config_to_class(algo_config):
     gaussian_enabled = ("gaussian" in algo_config and algo_config.gaussian.enabled)
     gmm_enabled = ("gmm" in algo_config and algo_config.gmm.enabled)
     vae_enabled = ("vae" in algo_config and algo_config.vae.enabled)
+    discrete_enabled = ("discrete" in algo_config and algo_config.discrete.enabled)
 
     rnn_enabled = algo_config.rnn.enabled
     # support legacy configs that do not have "transformer" item
     transformer_enabled = ("transformer" in algo_config) and algo_config.transformer.enabled
 
-    if gaussian_enabled:
+    if discrete_enabled:
+        if rnn_enabled:
+            raise NotImplementedError
+        elif transformer_enabled:
+            raise NotImplementedError
+        else:
+            algo_class, algo_kwargs = BC_Discrete, {}
+    elif gaussian_enabled:
         if rnn_enabled:
             raise NotImplementedError
         elif transformer_enabled:
@@ -251,6 +259,129 @@ class BC(PolicyAlgo):
         return self.nets["policy"](obs_dict, goal_dict=goal_dict)
 
 
+class BC_Discrete(BC):
+    """
+    BC training with a discretized action policy. Each action dimension is
+    binned independently and trained with cross entropy.
+    """
+    def _create_networks(self):
+        """
+        Creates networks and places them into @self.nets.
+        """
+        assert self.algo_config.discrete.enabled
+        assert self.algo_config.discrete.action_max > self.algo_config.discrete.action_min
+
+        self.nets = nn.ModuleDict()
+        self.nets["policy"] = PolicyNets.DiscreteActorNetwork(
+            obs_shapes=self.obs_shapes,
+            goal_shapes=self.goal_shapes,
+            ac_dim=self.ac_dim,
+            mlp_layer_dims=self.algo_config.actor_layer_dims,
+            num_bins=self.algo_config.discrete.num_bins,
+            action_min=self.algo_config.discrete.action_min,
+            action_max=self.algo_config.discrete.action_max,
+            encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
+        )
+        self.nets = self.nets.float().to(self.device)
+
+    def _actions_to_bin_indices(self, actions):
+        """
+        Convert continuous actions to nearest bin indices in [0, num_bins - 1].
+        """
+        num_bins = self.algo_config.discrete.num_bins
+        action_min = self.algo_config.discrete.action_min
+        action_max = self.algo_config.discrete.action_max
+        actions = actions.clamp(action_min, action_max)
+        scaled_actions = (actions - action_min) / (action_max - action_min)
+        bin_indices = torch.round(scaled_actions * (num_bins - 1)).long()
+        return bin_indices.clamp(0, num_bins - 1)
+
+    def _actions_to_soft_bin_targets(self, actions):
+        """
+        Convert continuous actions to Gaussian soft targets over uniform bins.
+        """
+        num_bins = self.algo_config.discrete.num_bins
+        action_min = self.algo_config.discrete.action_min
+        action_max = self.algo_config.discrete.action_max
+        sigma_bins = self.algo_config.discrete.target_sigma_bins
+        assert sigma_bins > 0.
+        actions = actions.clamp(action_min, action_max)
+
+        bin_centers = torch.linspace(
+            action_min,
+            action_max,
+            num_bins,
+            device=actions.device,
+            dtype=actions.dtype,
+        )
+        bin_width = (action_max - action_min) / float(num_bins - 1)
+        sigma = sigma_bins * bin_width
+        distances = (bin_centers.view(*([1] * actions.ndim), num_bins) - actions.unsqueeze(-1)) / sigma
+        return torch.softmax(-0.5 * distances.pow(2), dim=-1)
+
+    def _forward_training(self, batch):
+        """
+        Compute action-bin logits.
+        """
+        action_logits = self.nets["policy"].forward_train(
+            obs_dict=batch["obs"],
+            goal_dict=batch["goal_obs"],
+        )
+        action_targets = self._actions_to_bin_indices(batch["actions"])
+        log_action_probs = F.log_softmax(action_logits, dim=-1)
+        hard_selected_action_log_probs = D.Categorical(logits=action_logits).log_prob(action_targets)
+
+        target_type = self.algo_config.discrete.get("target_type", "one_hot")
+        assert target_type in ["one_hot", "gaussian"]
+        if target_type == "gaussian":
+            action_soft_targets = self._actions_to_soft_bin_targets(batch["actions"])
+            selected_action_log_probs = (action_soft_targets * log_action_probs).sum(dim=-1)
+        else:
+            selected_action_log_probs = hard_selected_action_log_probs
+        log_probs = selected_action_log_probs.sum(dim=-1)
+        hard_log_probs = hard_selected_action_log_probs.sum(dim=-1)
+
+        predictions = OrderedDict(
+            action_logits=action_logits,
+            action_targets=action_targets,
+            log_probs=log_probs,
+            hard_log_probs=hard_log_probs,
+        )
+        return predictions
+
+    def _compute_losses(self, predictions, batch):
+        """
+        Compute independent cross entropy over action bins for each action dim.
+        """
+        logits = predictions["action_logits"]
+
+        losses = OrderedDict()
+        losses["classification_loss"] = -predictions["log_probs"].mean()
+        losses["hard_classification_loss"] = -predictions["hard_log_probs"].mean()
+
+        pred_indices = logits.argmax(dim=-1)
+        pred_actions = self.nets["policy"].indices_to_actions(pred_indices)
+        losses["l2_loss"] = nn.MSELoss()(pred_actions, batch["actions"])
+        losses["action_loss"] = losses["classification_loss"]
+        return losses
+
+    def log_info(self, info):
+        """
+        Process info dictionary from @train_on_batch to summarize information
+        to pass to tensorboard for logging.
+        """
+        log = PolicyAlgo.log_info(self, info)
+        log["Loss"] = info["losses"]["action_loss"].item()
+        log["Classification_Loss"] = info["losses"]["classification_loss"].item()
+        log["Hard_Classification_Loss"] = info["losses"]["hard_classification_loss"].item()
+        log["L2_Loss"] = info["losses"]["l2_loss"].item()
+        log["Log_Likelihood"] = info["predictions"]["log_probs"].mean().item()
+        log["Hard_Log_Likelihood"] = info["predictions"]["hard_log_probs"].mean().item()
+        if "policy_grad_norms" in info:
+            log["Policy_Grad_Norms"] = info["policy_grad_norms"]
+        return log
+
+
 class BC_Gaussian(BC):
     """
     BC training with a Gaussian policy.
@@ -292,6 +423,7 @@ class BC_Gaussian(BC):
         dists = self.nets["policy"].forward_train(
             obs_dict=batch["obs"], 
             goal_dict=batch["goal_obs"],
+            low_noise_eval=False,
         )
 
         # make sure that this is a batch of multivariate action distributions, so that
@@ -622,6 +754,7 @@ class BC_RNN_GMM(BC_RNN):
         dists = self.nets["policy"].forward_train(
             obs_dict=batch["obs"], 
             goal_dict=batch["goal_obs"],
+            low_noise_eval=False,
         )
 
         # make sure that this is a batch of multivariate action distributions, so that

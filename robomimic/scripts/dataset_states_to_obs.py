@@ -56,9 +56,37 @@ from copy import deepcopy
 from tqdm import tqdm
 
 import robomimic.utils.tensor_utils as TensorUtils
-import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
+import robomimic.envs.env_base as EB
 from robomimic.envs.env_base import EnvBase
+
+
+def get_env_metadata_from_dataset(dataset_path):
+    """
+    Lightweight env metadata reader for raw robosuite or robomimic datasets.
+    Avoids importing training utilities through file_utils.
+    """
+    with h5py.File(os.path.expanduser(dataset_path), "r") as f:
+        if "env_args" in f["data"].attrs:
+            env_meta = json.loads(f["data"].attrs["env_args"])
+        else:
+            env_name = f["data"].attrs.get("env", None)
+            env_info = f["data"].attrs.get("env_info", None)
+            assert env_name is not None and env_info is not None, (
+                "dataset must contain either data.attrs['env_args'] or raw robosuite "
+                "metadata data.attrs['env'] and data.attrs['env_info']"
+            )
+            env_meta = dict(
+                type=EB.EnvType.ROBOSUITE_TYPE,
+                env_name=env_name,
+                env_version=f["data"].attrs.get("repository_version", None),
+                env_kwargs=json.loads(env_info),
+            )
+
+    if "env_lang" in env_meta["env_kwargs"]:
+        del env_meta["env_kwargs"]["env_lang"]
+    EnvUtils.set_env_specific_obs_processing(env_meta=env_meta)
+    return env_meta
 
 
 def extract_trajectory(
@@ -222,7 +250,7 @@ def dataset_states_to_obs(args):
         assert len(args.camera_names) > 0, "must specify camera names if using depth"
 
     # create environment to use for data processing
-    env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path=args.dataset)
+    env_meta = get_env_metadata_from_dataset(dataset_path=args.dataset)
     env = EnvUtils.create_env_for_data_processing(
         env_meta=env_meta,
         camera_names=args.camera_names, 
