@@ -1,5 +1,6 @@
 """
 Launch robomimic training jobs on Slurm from a generated config path manifest.
+It can also launch arbitrary command manifests with --commands_file.
 
 Example:
     python robomimic/scripts/generate_square_bc_sweep_configs.py
@@ -22,7 +23,9 @@ from typing import List, TextIO
 
 
 SLURM_ARGS = {
-    "partition": {"type": str, "default": "iris-hi"},
+    "partition": {"type": str, "default": "sc-loprio"},
+    "constraint": {"type": str, "required": False, "default": "[ampere|hopper|ada]"},
+    # "partition": {"type": str, "default": "iris-hi"},
     "time": {"type": str, "default": "72:00:00"},
     "nodes": {"type": int, "default": 1},
     "ntasks-per-node": {"type": int, "default": 1},
@@ -36,13 +39,13 @@ SLURM_ARGS = {
         "type": str,
         "required": False,
         "default": (
-            "iris1,iris2,iris3,iris4,iris5,iris6,iris7,"
+            "iris1,iris2,iris3,iris4,iris5,iris6,iris8,"
             "iris-hgx-1,iris-hgx-2,iris-hp-z8,"
-            "iliad1,iliad2,iliad3,iliad4,iliad-hgx-1"
+            "iliad1,iliad2,iliad3,iliad4,iliad5,iliad6,iliad-hgx-1"
         ),
     },
     "nodelist": {"type": str, "required": False, "default": None},
-    "account": {"type": str, "required": False, "default": "iris"},
+    "account": {"type": str, "required": False, "default": "iliad"},
     "mail-user": {"type": str, "required": False, "default": "tiangao@stanford.edu"},
     "mail-type": {"type": str, "required": False, "default": "END,FAIL,REQUEUE,TIME_LIMIT_80"},
 }
@@ -56,6 +59,14 @@ def parse_args() -> argparse.Namespace:
         "--config_paths_file",
         default="robomimic/exps/square/sweep/config_paths.txt",
         help="Newline-delimited file containing config paths to launch.",
+    )
+    parser.add_argument(
+        "--commands_file",
+        default=None,
+        help=(
+            "Optional newline-delimited file containing full shell commands to launch. "
+            "When set, lines are emitted directly instead of wrapped as train.py --config commands."
+        ),
     )
     parser.add_argument(
         "--entry_point",
@@ -128,6 +139,17 @@ def read_config_paths(config_paths_file: str) -> List[str]:
     ]
 
 
+def read_command_lines(commands_file: str) -> List[str]:
+    path = Path(commands_file)
+    if not path.exists():
+        raise FileNotFoundError("Commands file does not exist: {}".format(path))
+    return [
+        line.strip()
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def make_batch_sizes(num_scripts: int, scripts_per_job: int, remainder: str) -> List[int]:
     if scripts_per_job <= 0:
         raise ValueError("--scripts-per-job must be positive")
@@ -164,6 +186,16 @@ def sweep_name_from_config_path(config_path: str) -> str:
     return sanitize_job_name(path.stem)
 
 
+def command_name(command: str) -> str:
+    parts = shlex.split(command)
+    if "--output" in parts:
+        output = Path(parts[parts.index("--output") + 1])
+        return sanitize_job_name(output.stem)
+    if len(parts) >= 2:
+        return sanitize_job_name(Path(parts[1]).stem)
+    return sanitize_job_name(command[:48])
+
+
 def job_name_for_batch(base_job_name: str, config_paths: List[str], batch_index: int) -> str:
     sweep_names = [sweep_name_from_config_path(path) for path in config_paths]
     if len(sweep_names) == 1:
@@ -171,6 +203,15 @@ def job_name_for_batch(base_job_name: str, config_paths: List[str], batch_index:
     else:
         suffix = "{}-to-{}_batch{}".format(sweep_names[0], sweep_names[-1], batch_index)
     return sanitize_job_name("{}_{}".format(base_job_name, suffix))
+
+
+def job_name_for_command_batch(base_job_name: str, commands: List[str], batch_index: int) -> str:
+    names = [command_name(command) for command in commands]
+    if len(names) == 1:
+        suffix = names[0]
+    else:
+        suffix = "{}-to-{}_batch{}".format(names[0], names[-1], batch_index)
+    return sanitize_job_name("{}_{}".format(base_job_name, suffix))[:180]
 
 
 def write_slurm_header(f: TextIO, args: argparse.Namespace) -> None:
@@ -221,36 +262,44 @@ def train_command(config_path: str, args: argparse.Namespace) -> str:
 
 def main() -> None:
     args = parse_args()
+    if args.commands_file is not None and args.config_paths_file != "robomimic/exps/square/sweep/config_paths.txt":
+        raise ValueError("Use either --commands_file or --config_paths_file, not both")
     if args.resume and args.overwrite:
         raise ValueError("--resume and --overwrite cannot be used together")
-    config_paths = read_config_paths(args.config_paths_file)
+    use_commands_file = args.commands_file is not None
+    scripts = read_command_lines(args.commands_file) if use_commands_file else read_config_paths(args.config_paths_file)
     batch_sizes = make_batch_sizes(
-        num_scripts=len(config_paths),
+        num_scripts=len(scripts),
         scripts_per_job=args.scripts_per_job,
         remainder=args.remainder,
     )
     if not batch_sizes:
-        print("No config paths found in {}".format(args.config_paths_file))
+        source = args.commands_file if use_commands_file else args.config_paths_file
+        print("No launch lines found in {}".format(source))
         return
 
-    config_index = 0
+    script_index = 0
     procs = []
-    for batch_index, num_configs in enumerate(batch_sizes):
-        current_configs = config_paths[config_index : config_index + num_configs]
-        config_index += num_configs
+    for batch_index, num_scripts in enumerate(batch_sizes):
+        current_scripts = scripts[script_index : script_index + num_scripts]
+        script_index += num_scripts
         slurm_args = copy.deepcopy(args)
-        slurm_args.job_name = job_name_for_batch(args.job_name, current_configs, batch_index)
+        slurm_args.job_name = (
+            job_name_for_command_batch(args.job_name, current_scripts, batch_index)
+            if use_commands_file
+            else job_name_for_batch(args.job_name, current_scripts, batch_index)
+        )
 
         _, slurm_file = tempfile.mkstemp(text=True, prefix="job_", suffix=".sh")
         with open(slurm_file, "w+") as f:
             write_slurm_header(f, slurm_args)
             f.write("sleep {}\n".format(args.sleep_seconds * batch_index))
-            for config_path in current_configs:
-                command = train_command(config_path, args)
-                if len(current_configs) != 1:
+            for script in current_scripts:
+                command = script if use_commands_file else train_command(script, args)
+                if len(current_scripts) != 1:
                     command += " &"
                 f.write(command + "\n")
-            if len(current_configs) != 1:
+            if len(current_scripts) != 1:
                 f.write("wait\n")
 
         print("Prepared Slurm script: {} ({})".format(slurm_file, slurm_args.job_name))

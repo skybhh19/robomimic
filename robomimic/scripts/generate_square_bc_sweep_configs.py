@@ -11,6 +11,9 @@ Example:
         --use_left_close_low_obs
 
     python robomimic/scripts/generate_square_bc_sweep_configs.py \
+        --camera_images_only
+
+    python robomimic/scripts/generate_square_bc_sweep_configs.py \
         --config_paths_file robomimic/exps/square/sweep/config_paths.txt
 """
 import argparse
@@ -34,6 +37,8 @@ LEFT_CLOSE_LOW_CAMERA_NAME = "left_close_low"
 LEFT_CLOSE_LOW_OBS_KEY = "left_close_low_image"
 WRIST_CAMERA_NAME = "robot0_eye_in_hand"
 WRIST_OBS_KEY = "robot0_eye_in_hand_image"
+DEFAULT_OUTPUT_DIR = "robomimic/exps/square/sweep"
+IMAGE_ONLY_OUTPUT_DIR = "robomimic/exps/square/sweep_image_only"
 DATASET_SPECS = {
     "ph": {
         "path": Path("ph") / "image.hdf5",
@@ -72,7 +77,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--template_dir", default="robomimic/exps/square/ph")
     parser.add_argument("--dataset_dir", default="robomimic/datasets/square")
-    parser.add_argument("--output_dir", default="robomimic/exps/square/sweep")
+    parser.add_argument("--output_dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
         "--config_paths_file",
         default=None,
@@ -88,6 +93,11 @@ def parse_args():
         "--use_left_close_low_obs",
         action="store_true",
         help="Include left_close_low_image as a training RGB observation. Only use with datasets that contain this key.",
+    )
+    parser.add_argument(
+        "--camera_images_only",
+        action="store_true",
+        help="Train from camera image observations only, with no low-dimensional robot state inputs.",
     )
     return parser.parse_args()
 
@@ -124,19 +134,40 @@ def set_dataset_camera_obs(config, dataset, use_left_close_low_obs):
             camera_names.append(LEFT_CLOSE_LOW_CAMERA_NAME)
 
 
-def make_config(template, dataset, policy, weight_decay, dataset_dir, use_left_close_low_obs):
+def set_camera_images_only_obs(config):
+    config["observation"]["modalities"]["obs"]["low_dim"] = []
+
+
+def make_config(
+    template,
+    dataset,
+    policy,
+    weight_decay,
+    dataset_dir,
+    use_left_close_low_obs,
+    camera_images_only,
+):
     config = deepcopy(template)
     tag = weight_decay_tag(weight_decay)
-    run_name = "bc_{}_square_{}_image_{}".format(policy, dataset, tag)
+    obs_tag = "camera_image_only" if camera_images_only else "image"
+    run_name = "bc_{}_square_{}_{}_{}".format(policy, dataset, obs_tag, tag)
 
     config["experiment"]["name"] = run_name
-    config["experiment"]["logging"]["wandb_proj_name"] = "pomdp_square"
+    config["experiment"]["logging"]["wandb_proj_name"] = "pomdp_square_1"
     config["experiment"]["render_video"] = True
-    config["experiment"]["rollout"]["n"] = 1
+    config["experiment"]["validate"] = False
+    config["experiment"]["save"]["on_best_validation"] = False
+    config["experiment"]["rollout"]["enabled"] = False
+    config["experiment"]["rollout"]["n"] = 50
+    config["experiment"]["rollout"]["warmstart"] = 100
     config["train"]["data"] = str(Path(dataset_dir) / DATASET_SPECS[dataset]["path"])
-    config["train"]["output_dir"] = "trained_models/square/sweep/{}/{}/{}".format(
-        dataset, policy, tag)
+    config["train"]["hdf5_filter_key"] = None
+    config["train"]["hdf5_validation_filter_key"] = None
+    train_output_root = "sweep_image_only" if camera_images_only else "sweep"
+    config["train"]["output_dir"] = "trained_models/square/{}/{}/{}/{}".format(
+        train_output_root, dataset, policy, tag)
     config["train"]["num_data_workers"] = 0
+    config["train"]["hdf5_cache_mode"] = "all"
     config["algo"]["optim_params"]["policy"]["regularization"]["L2"] = weight_decay
 
     discrete_enabled = policy in ["discrete", "discrete_gaussian"]
@@ -149,6 +180,8 @@ def make_config(template, dataset, policy, weight_decay, dataset_dir, use_left_c
     config["algo"]["rnn"]["enabled"] = False
     config["algo"]["transformer"]["enabled"] = False
     set_dataset_camera_obs(config, dataset, use_left_close_low_obs)
+    if camera_images_only:
+        set_camera_images_only_obs(config)
     return config
 
 
@@ -156,6 +189,8 @@ def main():
     args = parse_args()
     templates = load_templates(args.template_dir)
     output_dir = Path(args.output_dir)
+    if args.camera_images_only and args.output_dir == DEFAULT_OUTPUT_DIR:
+        output_dir = Path(IMAGE_ONLY_OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     written = []
@@ -169,6 +204,7 @@ def main():
                     weight_decay=weight_decay,
                     dataset_dir=args.dataset_dir,
                     use_left_close_low_obs=args.use_left_close_low_obs,
+                    camera_images_only=args.camera_images_only,
                 )
                 path = output_dir / dataset / policy / "{}.json".format(weight_decay_tag(weight_decay))
                 path.parent.mkdir(parents=True, exist_ok=True)

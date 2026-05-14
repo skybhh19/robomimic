@@ -1,4 +1,0 @@
-robomimic/exps/square/sweep/mh_left_low_close/discrete/wd0.json
-robomimic/exps/square/sweep/mh_left_low_close/gmm/wd0.json
-robomimic/exps/square/sweep/random_post/gmm/wd1em04.json
-robomimic/exps/square/sweep/random_post_left_low_close/discrete/wd1em04.json

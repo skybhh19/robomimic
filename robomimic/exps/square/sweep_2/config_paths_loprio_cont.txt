@@ -1,0 +1,1 @@
+robomimic/exps/square/sweep_2/random_post_left_low_close/gmm/wd0.json

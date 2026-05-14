@@ -7,7 +7,7 @@
             "terminal_output_to_txt": true,
             "log_tb": false,
             "log_wandb": true,
-            "wandb_proj_name": "pomdp_square"
+            "wandb_proj_name": "pomdp_square_1"
         },
         "save": {
             "enabled": true,
@@ -28,10 +28,10 @@
         "video_skip": 5,
         "rollout": {
             "enabled": true,
-            "n": 1,
+            "n": 50,
             "horizon": 400,
             "rate": 50,
-            "warmstart": 0,
+            "warmstart": 100,
             "terminate_on_success": true
         },
         "env_meta_update_dict": {
@@ -49,7 +49,7 @@
         "output_dir": "trained_models/square/sweep/ph_left_low_close/discrete/wd0",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 0,
-        "hdf5_cache_mode": "low_dim",
+        "hdf5_cache_mode": "all",
         "hdf5_use_swmr": true,
         "hdf5_load_next_obs": false,
         "hdf5_normalize_obs": false,
