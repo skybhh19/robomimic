@@ -196,6 +196,26 @@ def load_dict_from_checkpoint(ckpt_path):
         ckpt_dict (dict): Loaded checkpoint dictionary.
     """
     ckpt_path = os.path.expanduser(ckpt_path)
+
+    # Checkpoints saved under numpy>=2 can contain pickle references to
+    # numpy._core, while older python / robosuite environments may still use
+    # numpy<2 where the module is named numpy.core. Add a narrow compatibility
+    # alias before torch.load so old-env evaluation can read new checkpoints.
+    try:
+        import numpy as np
+        import numpy.core as np_core
+        import sys
+
+        if not hasattr(np, "_core"):
+            sys.modules.setdefault("numpy._core", np_core)
+            for name in ("multiarray", "numeric", "fromnumeric", "umath"):
+                old_name = "numpy.core.{}".format(name)
+                new_name = "numpy._core.{}".format(name)
+                if old_name in sys.modules:
+                    sys.modules.setdefault(new_name, sys.modules[old_name])
+    except Exception:
+        pass
+
     if not torch.cuda.is_available():
         ckpt_dict = torch.load(ckpt_path, map_location=lambda storage, loc: storage, weights_only=False)
     else:

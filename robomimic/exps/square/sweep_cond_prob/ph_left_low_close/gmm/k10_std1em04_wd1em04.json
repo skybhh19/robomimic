@@ -2,7 +2,7 @@
     "algo_name": "bc",
     "experiment": {
         "name": "bc_gmm_square_ph_left_low_close_image_k10_std1em04_wd1em04",
-        "validate": false,
+        "validate": true,
         "logging": {
             "terminal_output_to_txt": true,
             "log_tb": false,
@@ -53,8 +53,8 @@
         "hdf5_use_swmr": true,
         "hdf5_load_next_obs": false,
         "hdf5_normalize_obs": false,
-        "hdf5_filter_key": null,
-        "hdf5_validation_filter_key": null,
+        "hdf5_filter_key": "train",
+        "hdf5_validation_filter_key": "valid",
         "seq_length": 1,
         "pad_seq_length": true,
         "frame_stack": 1,

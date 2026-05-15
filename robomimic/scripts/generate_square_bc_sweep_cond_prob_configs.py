@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--datasets", nargs="+", default=list(DATASETS), choices=DATASETS)
     parser.add_argument("--weight_decays", nargs="+", type=float, default=[0.0, 1e-4])
     parser.add_argument("--num_modes", nargs="+", type=int, default=[5, 10, 20])
-    parser.add_argument("--min_stds", nargs="+", type=float, default=[1e-4, 1e-3])
+    parser.add_argument("--min_stds", nargs="+", type=float, default=[1e-4])
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument(
@@ -116,6 +116,7 @@ def apply_cond_prob_overrides(
     )
     config["experiment"]["logging"]["wandb_proj_name"] = "pomdp_square_cond_prob"
     config["experiment"]["epoch_every_n_steps"] = args.epoch_every_n_steps
+    config["experiment"]["validate"] = True
     config["experiment"]["validation_epoch_every_n_steps"] = (
         args.validation_epoch_every_n_steps
     )
@@ -131,6 +132,8 @@ def apply_cond_prob_overrides(
     config["train"]["batch_size"] = args.batch_size
     config["train"]["num_epochs"] = args.num_epochs
     config["train"]["hdf5_cache_mode"] = "all"
+    config["train"]["hdf5_filter_key"] = "train"
+    config["train"]["hdf5_validation_filter_key"] = "valid"
 
     policy_optim = config["algo"]["optim_params"]["policy"]
     policy_optim["learning_rate"]["initial"] = args.learning_rate

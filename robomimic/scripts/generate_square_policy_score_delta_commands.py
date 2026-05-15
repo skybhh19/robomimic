@@ -448,7 +448,7 @@ def generate_prob_sweep_commands(args, repo_root):
         else args.output_file
     )
     score_output_dir_arg = (
-        "robomimic/vis/policy_scores_prob_sweep_jsons"
+        "vis/policy_scores_prob_sweep_jsons"
         if args.score_output_dir == default_delta_score_dir
         else args.score_output_dir
     )

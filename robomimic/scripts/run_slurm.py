@@ -39,9 +39,9 @@ SLURM_ARGS = {
         "type": str,
         "required": False,
         "default": (
-            "iris1,iris2,iris3,iris4,iris5,iris6,iris8,"
+            "iris1,iris2,iris3,iris4,"
             "iris-hgx-1,iris-hgx-2,iris-hp-z8,"
-            "iliad1,iliad2,iliad3,iliad4,iliad5,iliad6,iliad-hgx-1"
+            "iliad1,iliad2,iliad3,iliad4,iliad-hgx-1"
         ),
     },
     "nodelist": {"type": str, "required": False, "default": None},

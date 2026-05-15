@@ -97,6 +97,18 @@ DISTRIBUTION_FIELDS = PRIMARY_FIELDS + [
 
 NLL_DISTRIBUTION_FIELDS = [key for key in DISTRIBUTION_FIELDS if "nll" in key]
 ENTROPY_DISTRIBUTION_FIELDS = [key for key in DISTRIBUTION_FIELDS if "entropy" in key]
+COMBINED_CURVE_COLORS = [
+    "#177a78",
+    "#c35a2d",
+    "#7c5cbf",
+    "#2e7ab8",
+    "#7b6f23",
+    "#a6425f",
+    "#0f766e",
+    "#b45309",
+    "#4f46e5",
+    "#64748b",
+]
 
 NORMALIZED_SCORE_SOURCES = OrderedDict(
     [
@@ -998,9 +1010,9 @@ def combined_filter_quality_chart_svg(trajectories, label_key, score_keys, title
     )
     paths = []
     legend = []
-    for score_key, curve in curves:
+    for idx, (score_key, curve) in enumerate(curves):
         spec = SCORE_FIELDS[score_key]
-        color = spec["color"]
+        color = COMBINED_CURVE_COLORS[idx % len(COMBINED_CURVE_COLORS)]
         paths.append(
             '<polyline points="{}" fill="none" stroke="{}" stroke-width="2.2" stroke-opacity="0.92" stroke-linejoin="round" stroke-linecap="round"/>'.format(
                 points(curve),
