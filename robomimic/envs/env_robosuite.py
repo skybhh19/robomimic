@@ -217,6 +217,8 @@ class EnvRobosuite(EB.EnvBase):
             if robosuite_version_id <= 3:
                 from robosuite.utils.mjcf_utils import postprocess_model_xml
                 xml = postprocess_model_xml(state["model"])
+                if hasattr(self.env, "edit_model_xml"):
+                    xml = self.env.edit_model_xml(xml)
             else:
                 # v1.4 and above use the class-based edit_model_xml function
                 xml = self.env.edit_model_xml(state["model"])

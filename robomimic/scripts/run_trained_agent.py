@@ -59,6 +59,10 @@ import numpy as np
 from copy import deepcopy
 
 import torch
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
 
 import robomimic
 import robomimic.utils.file_utils as FileUtils
@@ -227,7 +231,15 @@ def run_trained_agent(args):
         total_samples = 0
 
     rollout_stats = []
-    for i in range(rollout_num_episodes):
+    rollout_iter = range(rollout_num_episodes)
+    if tqdm is not None:
+        rollout_iter = tqdm(
+            rollout_iter,
+            total=rollout_num_episodes,
+            desc="Evaluating rollouts",
+            dynamic_ncols=True,
+        )
+    for i in rollout_iter:
         stats, traj = rollout(
             policy=policy, 
             env=env, 
@@ -369,4 +381,3 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     run_trained_agent(args)
-
