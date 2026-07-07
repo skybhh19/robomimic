@@ -1,0 +1,3 @@
+robomimic/exps/threading/policy/image/full/gmm/seed1.json
+robomimic/exps/threading/policy/image/full/gmm/seed2.json
+robomimic/exps/threading/policy/image/full/gmm/seed3.json

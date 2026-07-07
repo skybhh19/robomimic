@@ -1,0 +1,3 @@
+robomimic/exps/threading/policy/image/random_filters/gmm/random50pct/seed1.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random50pct/seed2.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random50pct/seed3.json
