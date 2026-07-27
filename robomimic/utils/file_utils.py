@@ -20,6 +20,7 @@ import robomimic.utils.obs_utils as ObsUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.lang_utils as LangUtils
+from robomimic.utils.dataset import transformed_action_dim
 from robomimic.config import config_factory
 from robomimic.algo import algo_factory
 from robomimic.algo import RolloutPolicy
@@ -147,9 +148,13 @@ def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=No
     demo_id = list(f["data"].keys())[0]
     demo = f["data/{}".format(demo_id)]
     
+    action_config = dataset_config.get("action_config", {})
     for key in action_keys:
         assert len(demo[key].shape) == 2 # shape should be (B, D)
-    action_dim = sum([demo[key].shape[1] for key in action_keys])
+    action_dim = sum([
+        transformed_action_dim(demo[key].shape[1], action_config[key] if key in action_config else {})
+        for key in action_keys
+    ])
     shape_meta["ac_dim"] = action_dim
 
     # observation dimensions
@@ -423,6 +428,10 @@ def policy_from_checkpoint(device=None, ckpt_path=None, ckpt_dict=None, verbose=
 
     # shape meta from model dict to get info needed to create model
     shape_meta = ckpt_dict["shape_metadata"]
+    if type(shape_meta) is list:
+        ckpt_dict = ckpt_dict.copy()
+        shape_meta = shape_meta[0]
+        ckpt_dict["shape_metadata"] = shape_meta
 
     # maybe restore observation normalization stats
     obs_normalization_stats = ckpt_dict.get("obs_normalization_stats", None)
@@ -491,6 +500,8 @@ def env_from_checkpoint(ckpt_path=None, ckpt_dict=None, env_name=None, render=Fa
     # metadata from model dict to get info needed to create environment
     env_meta = ckpt_dict["env_metadata"]
     shape_meta = ckpt_dict["shape_metadata"]
+    config, _ = config_from_checkpoint(algo_name=ckpt_dict["algo_name"], ckpt_dict=ckpt_dict, verbose=False)
+    env_meta = EnvUtils.apply_rollout_camera_view_mapping_to_env_meta(env_meta, config=config)
 
     # create env from saved metadata
     env = EnvUtils.create_env_from_metadata(
@@ -501,7 +512,6 @@ def env_from_checkpoint(ckpt_path=None, ckpt_dict=None, env_name=None, render=Fa
         use_image_obs=shape_meta.get("use_images", False),
         use_depth_obs=shape_meta.get("use_depths", False),
     )
-    config, _ = config_from_checkpoint(algo_name=ckpt_dict["algo_name"], ckpt_dict=ckpt_dict, verbose=False)
     env = EnvUtils.wrap_env_from_config(env, config=config) # apply environment wrapper, if applicable
     if verbose:
         print("============= Loaded Environment =============")

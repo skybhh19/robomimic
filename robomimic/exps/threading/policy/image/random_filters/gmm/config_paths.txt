@@ -1,9 +1,9 @@
-robomimic/exps/threading/policy/image/random_filters/gmm/random33pct/seed1.json
-robomimic/exps/threading/policy/image/random_filters/gmm/random33pct/seed2.json
-robomimic/exps/threading/policy/image/random_filters/gmm/random33pct/seed3.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random25pct/seed1.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random25pct/seed2.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random25pct/seed3.json
 robomimic/exps/threading/policy/image/random_filters/gmm/random50pct/seed1.json
 robomimic/exps/threading/policy/image/random_filters/gmm/random50pct/seed2.json
 robomimic/exps/threading/policy/image/random_filters/gmm/random50pct/seed3.json
-robomimic/exps/threading/policy/image/random_filters/gmm/random66pct/seed1.json
-robomimic/exps/threading/policy/image/random_filters/gmm/random66pct/seed2.json
-robomimic/exps/threading/policy/image/random_filters/gmm/random66pct/seed3.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random75pct/seed1.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random75pct/seed2.json
+robomimic/exps/threading/policy/image/random_filters/gmm/random75pct/seed3.json

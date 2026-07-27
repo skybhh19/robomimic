@@ -24,6 +24,7 @@ class PrintLogger(object):
     """
     def __init__(self, log_file):
         self.terminal = sys.stdout
+        self.encoding = getattr(self.terminal, "encoding", None)
         print('STDOUT will be forked to %s' % log_file)
         self.log_file = open(log_file, "a")
 
@@ -35,6 +36,16 @@ class PrintLogger(object):
     def flush(self):
         # ensure stdout gets flushed
         self.terminal.flush()
+        self.log_file.flush()
+
+    def isatty(self):
+        return hasattr(self.terminal, "isatty") and self.terminal.isatty()
+
+    def fileno(self):
+        return self.terminal.fileno()
+
+    def writable(self):
+        return True
 
 
 class DataLogger(object):
@@ -59,13 +70,15 @@ class DataLogger(object):
             import wandb
             import robomimic.macros as Macros
             
-            # set up wandb api key if specified in macros
-            if Macros.WANDB_API_KEY is not None:
-                os.environ["WANDB_API_KEY"] = Macros.WANDB_API_KEY
+            # Set up wandb credentials from private macros or environment.
+            wandb_api_key = Macros.WANDB_API_KEY or os.environ.get("WANDB_API_KEY")
+            if wandb_api_key is not None:
+                os.environ["WANDB_API_KEY"] = wandb_api_key
 
-            assert Macros.WANDB_ENTITY is not None, "WANDB_ENTITY macro is set to None." \
-                    "\nSet this macro in {base_path}/macros_private.py" \
-                    "\nIf this file does not exist, first run python {base_path}/scripts/setup_macros.py".format(base_path=robomimic.__path__[0])
+            wandb_entity_kwargs = {}
+            wandb_entity = Macros.WANDB_ENTITY or os.environ.get("WANDB_ENTITY")
+            if wandb_entity is not None:
+                wandb_entity_kwargs["entity"] = wandb_entity
             
             # attempt to set up wandb 10 times. If unsuccessful after these trials, don't use wandb
             num_attempts = 10
@@ -75,11 +88,11 @@ class DataLogger(object):
                     self._wandb_logger = wandb
 
                     self._wandb_logger.init(
-                        entity=Macros.WANDB_ENTITY,
                         project=config.experiment.logging.wandb_proj_name,
                         name=config.experiment.name,
                         dir=log_dir,
                         mode=("offline" if attempt == num_attempts - 1 else "online"),
+                        **wandb_entity_kwargs,
                     )
 
                     # set up info for identifying experiment

@@ -85,6 +85,27 @@ DEFAULT_CAMERAS = {
 }
 
 
+def add_text_banner(frame, text):
+    """
+    Add a black banner with white text to the top of an RGB frame.
+    """
+    if text is None:
+        return frame
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.fromarray(frame)
+    draw = ImageDraw.Draw(image)
+    banner_height = max(42, image.height // 14)
+    draw.rectangle([(0, 0), (image.width, banner_height)], fill=(0, 0, 0))
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", size=max(24, banner_height // 2))
+    except OSError:
+        font = ImageFont.load_default()
+    draw.text((14, banner_height // 2), text, fill=(255, 255, 255), font=font, anchor="lm")
+    return np.array(image)
+
+
 def playback_trajectory_with_env(
     env, 
     initial_state, 
@@ -95,6 +116,7 @@ def playback_trajectory_with_env(
     video_skip=5, 
     camera_names=None,
     first=False,
+    video_text=None,
 ):
     """
     Helper function to playback a single trajectory using the simulator environment.
@@ -154,6 +176,7 @@ def playback_trajectory_with_env(
                 for cam_name in camera_names:
                     video_img.append(env.render(mode="rgb_array", height=512, width=512, camera_name=cam_name))
                 video_img = np.concatenate(video_img, axis=1) # concatenate horizontally
+                video_img = add_text_banner(video_img, video_text)
                 video_writer.append_data(video_img)
             video_count += 1
 
@@ -168,6 +191,7 @@ def playback_trajectory_with_obs(
     image_names=None,
     depth_names=None,
     first=False,
+    video_text=None,
 ):
     """
     This function reads all "rgb" (and possibly "depth") observations in the dataset trajectory and
@@ -197,6 +221,7 @@ def playback_trajectory_with_obs(
             im = [traj_grp["obs/{}".format(k)][i] for k in image_names]
             depth = [depth_to_rgb(traj_grp["obs/{}".format(k)][i], depth_min=depth_min[k], depth_max=depth_max[k]) for k in depth_names] if depth_names is not None else []
             frame = np.concatenate(im + depth, axis=1)
+            frame = add_text_banner(frame, video_text)
             video_writer.append_data(frame)
         video_count += 1
 
@@ -258,7 +283,8 @@ def playback_dataset(args):
     
     # maybe reduce the number of demonstrations to playback
     if args.n is not None:
-        random.shuffle(demos)
+        if not getattr(args, "sequential", False):
+            random.shuffle(demos)
         demos = demos[:args.n]
 
     # maybe dump video
@@ -269,6 +295,7 @@ def playback_dataset(args):
     for ind in range(len(demos)):
         ep = demos[ind]
         print("Playing back episode: {}".format(ep))
+        video_text = "Episode: {}".format(ep) if getattr(args, "video_episode_id", False) else None
 
         if args.use_obs:
             playback_trajectory_with_obs(
@@ -278,6 +305,7 @@ def playback_dataset(args):
                 image_names=args.render_image_names,
                 depth_names=args.render_depth_names,
                 first=args.first,
+                video_text=video_text,
             )
             continue
 
@@ -302,6 +330,7 @@ def playback_dataset(args):
             video_skip=args.video_skip,
             camera_names=args.render_image_names,
             first=args.first,
+            video_text=video_text,
         )
 
     f.close()
@@ -331,6 +360,13 @@ if __name__ == "__main__":
         help="(optional) stop after n trajectories are played",
     )
 
+    # Preserve sorted demo order when using --n.
+    parser.add_argument(
+        "--sequential",
+        action="store_true",
+        help="when using --n, take the first n sorted trajectories instead of sampling randomly",
+    )
+
     # Use image observations instead of doing playback using the simulator env.
     parser.add_argument(
         "--use-obs",
@@ -358,6 +394,13 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="(optional) render trajectories to this video file path",
+    )
+
+    # Stamp the episode id on rendered video frames.
+    parser.add_argument(
+        "--video_episode_id",
+        action="store_true",
+        help="draw the current episode id at the top of each video frame",
     )
 
     # How often to write video frames during the playback

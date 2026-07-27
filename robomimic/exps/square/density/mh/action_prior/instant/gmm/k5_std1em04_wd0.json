@@ -1,0 +1,21 @@
+{
+    "script": "robomimic/scripts/fit_action_prior.py",
+    "distribution": "gmm",
+    "dataset": "mh=datasets/square/mh/image_v15.hdf5",
+    "action_key": "actions",
+    "output_dir": "robomimic/trained_models/square/density/mh/action_prior/instant/gmm/k5_std1em04_wd0",
+    "train_filter_key": "train",
+    "valid_filter_key": "valid",
+    "criterion": "val_nll",
+    "num_modes": 5,
+    "covariance_types": [
+        "diag"
+    ],
+    "min_std": 0.0001,
+    "n_init": 3,
+    "max_iter": 1000,
+    "tol": 0.0001,
+    "seed": 1,
+    "init_max_samples": 10000,
+    "init_lloyd_iters": 10
+}

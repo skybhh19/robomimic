@@ -1,0 +1,17 @@
+{
+    "script": "robomimic/scripts/fit_action_prior.py",
+    "distribution": "gaussian",
+    "dataset": "mh=datasets/square/mh/image_v15.hdf5",
+    "action_key": "actions",
+    "output_dir": "robomimic/trained_models/square/density/mh/action_prior/instant/gaussian/std1em02_wd0",
+    "train_filter_key": "train",
+    "valid_filter_key": "valid",
+    "criterion": "val_nll",
+    "covariance_types": [
+        "diag"
+    ],
+    "fixed_std": false,
+    "init_std": 0.1,
+    "min_std": 0.01,
+    "seed": 1
+}

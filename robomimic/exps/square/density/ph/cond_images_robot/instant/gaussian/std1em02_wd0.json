@@ -1,0 +1,112 @@
+{
+    "algo_name": "bc",
+    "experiment": {
+        "name": "bc_gaussian_square_ph_image_cond_images_robot_instant_std1em02_wd0",
+        "validate": true,
+        "logging": {
+            "log_wandb": true,
+            "wandb_proj_name": "pomdp_square_prob"
+        },
+        "save": {
+            "enabled": true,
+            "every_n_epochs": 100,
+            "on_best_validation": true
+        },
+        "epoch_every_n_steps": 500,
+        "rollout": {
+            "enabled": false
+        }
+    },
+    "train": {
+        "data": [
+            {
+                "path": "datasets/square/ph/image_v15.hdf5"
+            }
+        ],
+        "output_dir": "trained_models/square/density/ph/cond_images_robot/instant/gaussian/std1em02_wd0",
+        "num_data_workers": 0,
+        "hdf5_cache_mode": "all",
+        "hdf5_use_swmr": true,
+        "hdf5_filter_key": "train",
+        "hdf5_validation_filter_key": "valid",
+        "seq_length": 1,
+        "dataset_keys": [
+            "actions",
+            "dones"
+        ],
+        "action_keys": [
+            "actions"
+        ],
+        "action_config": {
+            "actions": {
+                "normalization": null
+            }
+        },
+        "batch_size": 16,
+        "num_epochs": 500,
+        "seed": 1
+    },
+    "algo": {
+        "gaussian": {
+            "enabled": true,
+            "fixed_std": false,
+            "init_std": 0.1,
+            "min_std": 0.01,
+            "std_activation": "softplus",
+            "low_noise_eval": true
+        },
+        "gmm": {
+            "enabled": false
+        }
+    },
+    "observation": {
+        "modalities": {
+            "obs": {
+                "low_dim": [
+                    "robot0_eef_pos",
+                    "robot0_eef_quat",
+                    "robot0_gripper_qpos"
+                ],
+                "rgb": [
+                    "robot0_eye_in_hand_image",
+                    "agentview_image"
+                ],
+                "depth": [],
+                "scan": []
+            },
+            "goal": {
+                "low_dim": [],
+                "rgb": [],
+                "depth": [],
+                "scan": []
+            }
+        },
+        "encoder": {
+            "rgb": {
+                "core_class": "VisualCore",
+                "core_kwargs": {
+                    "feature_dimension": 64,
+                    "backbone_class": "ResNet18Conv",
+                    "backbone_kwargs": {
+                        "pretrained": false,
+                        "input_coord_conv": false
+                    },
+                    "pool_class": "SpatialSoftmax",
+                    "pool_kwargs": {
+                        "num_kp": 32,
+                        "learnable_temperature": false,
+                        "temperature": 1.0,
+                        "noise_std": 0.0
+                    }
+                },
+                "obs_randomizer_class": "CropRandomizer",
+                "obs_randomizer_kwargs": {
+                    "crop_height": 76,
+                    "crop_width": 76,
+                    "num_crops": 1,
+                    "pos_enc": false
+                }
+            }
+        }
+    }
+}

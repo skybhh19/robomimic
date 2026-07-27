@@ -29,6 +29,7 @@ setup(
         "egl_probe>=1.0.1",
         "torch",
         "torchvision",
+        "wandb",
         "huggingface_hub==0.23.4",
         "transformers==4.41.2",
         "diffusers==0.11.1",

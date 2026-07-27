@@ -6,6 +6,9 @@ tests/assets/test.hdf5
 tests/assets/test_v141.hdf5
 tests/assets/test_v15.hdf5
 
+# local/generated datasets
+datasets/
+
 # pycharm configs
 .idea/
 

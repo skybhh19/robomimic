@@ -33,6 +33,8 @@ class DiffusionPolicyConfig(BaseConfig):
         
         # optimization parameters
         self.algo.optim_params.policy.optimizer_type = "adamw"
+        self.algo.optim_params.policy.betas = [0.9, 0.999]
+        self.algo.optim_params.policy.eps = 1e-8
         self.algo.optim_params.policy.learning_rate.initial = 1e-4      # policy learning rate
         self.algo.optim_params.policy.learning_rate.decay_factor = 0.1  # factor to decay LR by (if epoch schedule non-empty)
         self.algo.optim_params.policy.learning_rate.step_every_batch = True

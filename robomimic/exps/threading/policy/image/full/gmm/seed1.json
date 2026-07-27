@@ -32,7 +32,11 @@
             "horizon": 800,
             "rate": 50,
             "warmstart": 100,
-            "terminate_on_success": true
+            "terminate_on_success": true,
+            "video_camera_names": [
+                "agentview",
+                "robot0_eye_in_hand"
+            ]
         },
         "env_meta_update_dict": {
             "env_kwargs": {

@@ -145,7 +145,8 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # check if actions are normalized to [-1,1]
         if not self.action_check_done:
             actions = input_batch["actions"]
-            in_range = (-1 <= actions) & (actions <= 1)
+            range_eps = 1e-4
+            in_range = ((-1 - range_eps) <= actions) & (actions <= (1 + range_eps))
             all_in_range = torch.all(in_range).item()
             if not all_in_range:
                 raise ValueError("'actions' must be in range [-1,1] for Diffusion Policy! Check if hdf5_normalize_action is enabled.")

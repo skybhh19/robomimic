@@ -11,12 +11,14 @@ from contextlib import contextmanager
 from collections import OrderedDict
 
 import torch.utils.data
+import torch
 
 import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.obs_utils as ObsUtils
 import robomimic.utils.python_utils as PyUtils
 import robomimic.utils.log_utils as LogUtils
 import robomimic.utils.lang_utils as LangUtils
+import robomimic.utils.torch_utils as TorchUtils
 
 
 class SequenceDataset(torch.utils.data.Dataset):
@@ -340,22 +342,45 @@ class SequenceDataset(torch.utils.data.Dataset):
 
         # Run through all trajectories. For each one, compute minimal observation statistics, and then aggregate
         # with the previous statistics.
+        obs_keys = self.obs_keys
+        if self.hdf5_normalize_obs == "low_dim":
+            obs_keys = [k for k in self.obs_keys if ObsUtils.OBS_KEYS_TO_MODALITIES[k] == "low_dim"]
+            assert len(obs_keys) > 0, self.obs_keys
         ep = self.demos[0]
-        obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in self.obs_keys}
+        obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in obs_keys}
         obs_traj = ObsUtils.process_obs_dict(obs_traj)
         merged_stats = _compute_traj_stats(obs_traj)
         print("SequenceDataset: normalizing observations...")
         for ep in LogUtils.custom_tqdm(self.demos[1:]):
-            obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in self.obs_keys}
+            obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in obs_keys}
             obs_traj = ObsUtils.process_obs_dict(obs_traj)
             traj_stats = _compute_traj_stats(obs_traj)
             merged_stats = _aggregate_traj_stats(merged_stats, traj_stats)
 
         obs_normalization_stats = { k : {} for k in merged_stats }
-        for k in merged_stats:
-            # note we add a small tolerance of 1e-3 for std
-            obs_normalization_stats[k]["offset"] = merged_stats[k]["mean"].astype(np.float32)
-            obs_normalization_stats[k]["scale"] = (np.sqrt(merged_stats[k]["sqdiff"] / merged_stats[k]["n"]) + 1e-3).astype(np.float32)
+        if self.hdf5_normalize_obs == "dp_max_abs":
+            max_abs = max(
+                max(float(np.max(np.abs(merged_stats[k]["min"]))), float(np.max(np.abs(merged_stats[k]["max"]))))
+                for k in merged_stats
+            )
+            assert max_abs > 0.0, max_abs
+            for k in merged_stats:
+                obs_normalization_stats[k]["offset"] = np.zeros_like(merged_stats[k]["mean"], dtype=np.float32)
+                obs_normalization_stats[k]["scale"] = np.full_like(merged_stats[k]["mean"], max_abs, dtype=np.float32)
+        else:
+            for k in merged_stats:
+                # note we add a small tolerance of 1e-3 for std
+                obs_normalization_stats[k]["offset"] = merged_stats[k]["mean"].astype(np.float32)
+                obs_normalization_stats[k]["scale"] = (np.sqrt(merged_stats[k]["sqdiff"] / merged_stats[k]["n"]) + 1e-3).astype(np.float32)
+        if self.hdf5_normalize_obs == "low_dim":
+            for k in self.obs_keys:
+                if k not in obs_normalization_stats:
+                    obs = self.hdf5_file["data/{}/obs/{}".format(self.demos[0], k)][()].astype('float32')
+                    shape = ObsUtils.process_obs(obs=obs, obs_key=k).shape[1:]
+                    obs_normalization_stats[k] = {
+                        "offset": np.zeros((1,) + shape, dtype=np.float32),
+                        "scale": np.ones((1,) + shape, dtype=np.float32),
+                    }
         return obs_normalization_stats
 
     def get_obs_normalization_stats(self):
@@ -376,7 +401,7 @@ class SequenceDataset(torch.utils.data.Dataset):
         action_traj = dict()
         for key in self.action_keys:
             action_traj[key] = self.hdf5_file["data/{}/{}".format(ep, key)][()].astype('float32')
-        return action_traj
+        return transform_action_dict(action_traj, self.action_config)
    
     def get_action_stats(self):
         ep = self.demos[0]
@@ -515,6 +540,7 @@ class SequenceDataset(torch.utils.data.Dataset):
             if len(ac.shape) == 1:
                 ac = ac.reshape(-1, 1)
             ac_dict[k] = ac
+        ac_dict = transform_action_dict(ac_dict, self.action_config)
        
         # normalize actions
         action_normalization_stats = self.get_action_normalization_stats()
@@ -908,8 +934,81 @@ def action_stats_to_normalization_stats(action_stats, action_config):
                 "scale": input_std,
                 "offset": input_mean
             }
+        elif norm_method == "dp_abs_action":
+            action_normalization_stats[action_key] = dp_abs_action_normalization_stats(action_stats[action_key])
         else:
             raise NotImplementedError(
                 'action_config.actions.normalization: "{}" is not supported'.format(norm_method))
     
     return action_normalization_stats
+
+
+def transformed_action_dim(action_dim, action_config):
+    if action_config.get("transform", None) == "dp_abs_action_6d":
+        assert action_dim in (7, 14), "Expected 7D or 14D absolute action, got {}".format(action_dim)
+        return action_dim // 7 * 10
+    return action_dim
+
+
+def transform_action(action, action_config):
+    if action_config.get("transform", None) != "dp_abs_action_6d":
+        return action
+    assert action.shape[-1] in (7, 14), "Expected 7D or 14D absolute action, got {}".format(action.shape)
+    is_dual_arm = action.shape[-1] == 14
+    raw_shape = action.shape
+    if is_dual_arm:
+        action = action.reshape(*action.shape[:-1], 2, 7)
+    pos = action[..., :3]
+    rot_axis_angle = torch.from_numpy(action[..., 3:6])
+    rot_6d = TorchUtils.axis_angle_to_rot_6d(rot_axis_angle).numpy().astype(np.float32)
+    gripper = action[..., 6:]
+    action = np.concatenate([pos, rot_6d, gripper], axis=-1).astype(np.float32)
+    if is_dual_arm:
+        action = action.reshape(*raw_shape[:-1], 20)
+    return action
+
+
+def inverse_transform_action(action, action_config):
+    if action_config.get("transform", None) != "dp_abs_action_6d":
+        return action
+    assert action.shape[-1] in (10, 20), "Expected 10D or 20D transformed action, got {}".format(action.shape)
+    is_dual_arm = action.shape[-1] == 20
+    raw_shape = action.shape
+    if is_dual_arm:
+        action = action.reshape(*action.shape[:-1], 2, 10)
+    pos = action[..., :3]
+    rot_6d = torch.from_numpy(action[..., 3:9])
+    rot_axis_angle = TorchUtils.rot_6d_to_axis_angle(rot_6d).numpy().astype(np.float32)
+    gripper = action[..., 9:]
+    action = np.concatenate([pos, rot_axis_angle, gripper], axis=-1).astype(np.float32)
+    if is_dual_arm:
+        action = action.reshape(*raw_shape[:-1], 14)
+    return action
+
+
+def transform_action_dict(action_dict, action_config):
+    return OrderedDict(
+        (key, transform_action(value, action_config[key] if key in action_config else {}))
+        for key, value in action_dict.items()
+    )
+
+
+def dp_abs_action_normalization_stats(action_stats):
+    action_dim = action_stats["max"].shape[-1]
+    assert action_dim in (10, 20), "Expected transformed absolute action dim 10 or 20, got {}".format(action_dim)
+    scale = np.ones_like(action_stats["max"], dtype=np.float32)
+    offset = np.zeros_like(action_stats["max"], dtype=np.float32)
+    for start in range(0, action_dim, 10):
+        input_min = action_stats["min"][start:start + 3].astype(np.float32)
+        input_max = action_stats["max"][start:start + 3].astype(np.float32)
+        input_range = input_max - input_min
+        ignore_dim = input_range < 1e-7
+        input_range[ignore_dim] = 2.0
+        scale[start:start + 3] = input_range / 2.0
+        this_offset = input_min + scale[start:start + 3]
+        this_offset[ignore_dim] = input_min[ignore_dim]
+        offset[start:start + 3] = this_offset
+    return {
+        "scale": scale,
+        "offset": offset,
+    }

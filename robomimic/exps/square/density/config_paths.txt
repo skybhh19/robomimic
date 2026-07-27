@@ -1,0 +1,12 @@
+robomimic/exps/square/density/mh/cond_images/instant/gaussian/std1em02_wd0.json
+robomimic/exps/square/density/mh/cond_images/instant/gmm/k5_std1em04_wd0.json
+robomimic/exps/square/density/mh/cond_images_robot/instant/gaussian/std1em02_wd0.json
+robomimic/exps/square/density/mh/cond_images_robot/instant/gmm/k5_std1em04_wd0.json
+robomimic/exps/square/density/ph/cond_images/instant/gaussian/std1em02_wd0.json
+robomimic/exps/square/density/ph/cond_images/instant/gmm/k5_std1em04_wd0.json
+robomimic/exps/square/density/ph/cond_images_robot/instant/gaussian/std1em02_wd0.json
+robomimic/exps/square/density/ph/cond_images_robot/instant/gmm/k5_std1em04_wd0.json
+robomimic/exps/square/density/rollout_1400_randomviews/cond_images/instant/gaussian/std1em02_wd0.json
+robomimic/exps/square/density/rollout_1400_randomviews/cond_images/instant/gmm/k5_std1em04_wd0.json
+robomimic/exps/square/density/rollout_1400_randomviews/cond_images_robot/instant/gaussian/std1em02_wd0.json
+robomimic/exps/square/density/rollout_1400_randomviews/cond_images_robot/instant/gmm/k5_std1em04_wd0.json

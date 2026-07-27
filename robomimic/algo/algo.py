@@ -21,6 +21,7 @@ import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.obs_utils as ObsUtils
 import robomimic.utils.python_utils as PyUtils
+import robomimic.utils.dataset as DatasetUtils
 
 from torch.utils.data import DataLoader
 
@@ -577,6 +578,9 @@ class RolloutPolicy(object):
             ac_dict = ObsUtils.unnormalize_dict(ac_dict, normalization_stats=self.action_normalization_stats)
             action_config = self.policy.global_config.train.action_config
             for key, value in ac_dict.items():
+                if action_config[key].get("transform", None) == "dp_abs_action_6d":
+                    ac_dict[key] = DatasetUtils.inverse_transform_action(value, action_config[key])
+                    continue
                 this_format = action_config[key].get("format", None)
                 if this_format == "rot_6d":
                     rot_6d = torch.from_numpy(value).unsqueeze(0)

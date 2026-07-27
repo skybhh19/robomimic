@@ -1,0 +1,3 @@
+robomimic/exps/square/policy/image/mh/observability_filters/gmm/observability66pct/seed1.json
+robomimic/exps/square/policy/image/mh/observability_filters/gmm/observability66pct/seed2.json
+robomimic/exps/square/policy/image/mh/observability_filters/gmm/observability66pct/seed3.json

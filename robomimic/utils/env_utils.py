@@ -333,11 +333,51 @@ def set_env_specific_obs_processing(env_meta=None, env_type=None, env=None):
         ))
 
 
+def get_rollout_camera_view_mapping(config):
+    return config.experiment.rollout.camera_view_mapping
+
+
+def apply_rollout_camera_view_mapping_to_env_meta(env_meta, config):
+    camera_view_mapping = get_rollout_camera_view_mapping(config)
+    if camera_view_mapping is None:
+        return env_meta
+    env_meta = deepcopy(env_meta)
+    camera_names = env_meta["env_kwargs"]["camera_names"]
+    assert not isinstance(camera_names, str), camera_names
+    rendered_camera_names = []
+    for camera_name in camera_names:
+        rendered_camera_name = camera_view_mapping[camera_name] if camera_name in camera_view_mapping else camera_name
+        if rendered_camera_name not in rendered_camera_names:
+            rendered_camera_names.append(rendered_camera_name)
+    env_meta["env_kwargs"]["camera_names"] = rendered_camera_names
+    return env_meta
+
+
+def register_rollout_camera_view_mapping_obs_keys(config):
+    camera_view_mapping = get_rollout_camera_view_mapping(config)
+    if camera_view_mapping is None:
+        return
+    import robomimic.utils.obs_utils as ObsUtils
+    assert ObsUtils.OBS_KEYS_TO_MODALITIES is not None
+    assert ObsUtils.OBS_MODALITIES_TO_KEYS is not None
+    for rollout_camera in camera_view_mapping.values():
+        rollout_key = "{}_image".format(rollout_camera)
+        ObsUtils.OBS_KEYS_TO_MODALITIES[rollout_key] = "rgb"
+        if rollout_key not in ObsUtils.OBS_MODALITIES_TO_KEYS["rgb"]:
+            ObsUtils.OBS_MODALITIES_TO_KEYS["rgb"].append(rollout_key)
+
+
 def wrap_env_from_config(env, config):
     """
     Wraps environment using the provided Config object to determine which wrappers
     to use (if any).
     """
+    camera_view_mapping = get_rollout_camera_view_mapping(config)
+    if camera_view_mapping is not None:
+        register_rollout_camera_view_mapping_obs_keys(config)
+        from robomimic.envs.wrappers import CameraViewMappingWrapper
+        env = CameraViewMappingWrapper(env, camera_view_mapping=camera_view_mapping)
+
     if ("frame_stack" in config.train) and (config.train.frame_stack > 1):
         from robomimic.envs.wrappers import FrameStackWrapper
         env = FrameStackWrapper(env, num_frames=config.train.frame_stack)

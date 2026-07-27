@@ -4,6 +4,8 @@ mainly consists of functions to assist with logging, rollouts, and the @run_epoc
 which is the core training logic for models in this repository.
 """
 import os
+import glob
+import csv
 import time
 import datetime
 import shutil
@@ -26,6 +28,16 @@ from robomimic.utils.dataset import SequenceDataset, MetaDataset
 from robomimic.envs.env_base import EnvBase
 from robomimic.envs.wrappers import EnvWrapper
 from robomimic.algo import RolloutPolicy
+
+
+def render_rollout_video_frame(env, camera_names=None):
+    if camera_names is None:
+        return env.render(mode="rgb_array", height=512, width=512)
+    assert isinstance(camera_names, (list, tuple)) and len(camera_names) > 0, camera_names
+    return np.concatenate(
+        [env.render(mode="rgb_array", height=512, width=512, camera_name=camera_name) for camera_name in camera_names],
+        axis=1,
+    )
 
 
 def get_exp_dir(config, auto_remove_exp_dir=False, resume=False):
@@ -59,10 +71,17 @@ def get_exp_dir(config, auto_remove_exp_dir=False, resume=False):
         base_output_dir = os.path.join(robomimic.__path__[0], base_output_dir)
     base_output_dir = os.path.join(base_output_dir, config.experiment.name)
     if resume:
-        assert os.path.exists(base_output_dir), "Resuming training run, but output dir {} does not exist".format(base_output_dir)
-        subdir_lst = os.listdir(base_output_dir)
-        time_str = sorted(subdir_lst)[-1]  # get the most recent subdirectory
-        assert os.path.isdir(os.path.join(base_output_dir, time_str)), "Found item {} that is not a subdirectory in {}".format(time_str, base_output_dir)
+        if os.path.exists(base_output_dir):
+            subdir_lst = [
+                name for name in os.listdir(base_output_dir)
+                if os.path.isdir(os.path.join(base_output_dir, name))
+            ]
+            if subdir_lst:
+                time_str = sorted(subdir_lst)[-1]  # get the most recent subdirectory
+            else:
+                resume = False
+        else:
+            resume = False
     elif os.path.exists(base_output_dir):
         if not auto_remove_exp_dir:
             ans = input("WARNING: model directory ({}) already exists! \noverwrite? (y/n)\n".format(base_output_dir))
@@ -280,6 +299,7 @@ def run_rollout(
         render=False,
         video_writer=None,
         video_skip=5,
+        video_camera_names=None,
         terminate_on_success=False,
     ):
     """
@@ -300,6 +320,8 @@ def run_rollout(
             rate given by @video_skip
 
         video_skip (int): how often to write video frame
+
+        video_camera_names (list): camera view names to concatenate horizontally in rollout videos
 
         terminate_on_success (bool): if True, terminate episode early as soon as a success is encountered
 
@@ -354,7 +376,7 @@ def run_rollout(
             # visualization
             if video_writer is not None:
                 if video_count % video_skip == 0:
-                    frame = env.render(mode="rgb_array", height=512, width=512)
+                    frame = render_rollout_video_frame(env=env, camera_names=video_camera_names)
                     video_frames.append(frame)
 
                 video_count += 1
@@ -398,6 +420,7 @@ def rollout_with_stats(
         video_path=None,
         epoch=None,
         video_skip=5,
+        video_camera_names=None,
         terminate_on_success=False,
         verbose=False,
     ):
@@ -429,6 +452,8 @@ def rollout_with_stats(
         epoch (int): epoch number (used for video naming)
 
         video_skip (int): how often to write video frame
+
+        video_camera_names (list): camera view names to concatenate horizontally in rollout videos
 
         terminate_on_success (bool): if True, terminate episode early as soon as a success is encountered
 
@@ -487,6 +512,7 @@ def rollout_with_stats(
                 use_goals=use_goals,
                 video_writer=env_video_writer,
                 video_skip=video_skip,
+                video_camera_names=video_camera_names,
                 terminate_on_success=terminate_on_success,
             )
             rollout_info["time"] = time.time() - rollout_timestamp
@@ -571,9 +597,11 @@ def should_save_from_rollout_logs(
             best_success_rate[env_name] = rollout_logs["Success_Rate"]
             if save_on_best_rollout_success_rate:
                 # save checkpoint if achieve new best success rate
-                epoch_ckpt_name += "_{}_success_{}".format(env_name, best_success_rate[env_name])
                 should_save_ckpt = True
                 ckpt_reason = "success"
+
+    for env_name in all_rollout_logs:
+        epoch_ckpt_name += "_{}_success_{}".format(env_name, all_rollout_logs[env_name]["Success_Rate"])
 
     # return the modified input attributes
     return dict(
@@ -583,6 +611,26 @@ def should_save_from_rollout_logs(
         should_save_ckpt=should_save_ckpt,
         ckpt_reason=ckpt_reason,
     )
+
+
+def write_checkpoint_success_rates_csv(csv_path, checkpoint_epoch, all_rollout_logs):
+    env_names = list(all_rollout_logs.keys())
+    fieldnames = ["checkpoint_epoch", "success_rate"]
+    if len(env_names) > 1:
+        fieldnames = ["checkpoint_epoch", "env_name", "success_rate"]
+    write_header = not os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        for env_name in env_names:
+            row = dict(
+                checkpoint_epoch=checkpoint_epoch,
+                success_rate=all_rollout_logs[env_name]["Success_Rate"],
+            )
+            if len(env_names) > 1:
+                row["env_name"] = env_name
+            writer.writerow(row)
 
 
 def save_model(model, config, env_meta, shape_meta, ckpt_path, variable_state=None, obs_normalization_stats=None, action_normalization_stats=None):
@@ -630,8 +678,18 @@ def save_model(model, config, env_meta, shape_meta, ckpt_path, variable_state=No
     if action_normalization_stats is not None:
         action_normalization_stats = deepcopy(action_normalization_stats)
         params["action_normalization_stats"] = TensorUtils.to_list(action_normalization_stats)
-    torch.save(params, ckpt_path)
+    tmp_ckpt_path = ckpt_path + ".tmp"
+    torch.save(params, tmp_ckpt_path)
+    os.replace(tmp_ckpt_path, ckpt_path)
     print("save checkpoint to {}".format(ckpt_path))
+
+
+def remove_previous_best_validation_ckpts(ckpt_dir, current_ckpt_path):
+    current_ckpt_path = os.path.abspath(current_ckpt_path)
+    for ckpt_path in glob.glob(os.path.join(ckpt_dir, "model_epoch_*_best_validation_*.pth")):
+        ckpt_path = os.path.abspath(ckpt_path)
+        if ckpt_path != current_ckpt_path:
+            os.remove(ckpt_path)
 
 
 def run_epoch(model, data_loader, epoch, validate=False, num_steps=None, obs_normalization_stats=None):

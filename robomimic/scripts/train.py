@@ -20,8 +20,8 @@ import json
 import numpy as np
 import time
 import os
-import shutil
 import psutil
+import random
 import sys
 import socket
 import traceback
@@ -40,6 +40,48 @@ import robomimic.utils.file_utils as FileUtils
 from robomimic.config import config_factory
 from robomimic.algo import algo_factory, RolloutPolicy
 from robomimic.utils.log_utils import PrintLogger, DataLogger, flush_warnings
+
+
+LATEST_CHECKPOINT_EVERY_N_EPOCHS = 20
+
+
+def latest_checkpoint_path(ckpt_dir):
+    if ckpt_dir is None:
+        return None
+    return os.path.join(ckpt_dir, "model_epoch_latest.pth")
+
+
+def resume_checkpoint_candidates(ckpt_dir):
+    candidates = []
+    if ckpt_dir is not None and os.path.isdir(ckpt_dir):
+        candidates = [
+            os.path.join(ckpt_dir, name)
+            for name in os.listdir(ckpt_dir)
+            if name.startswith("model_epoch_") and name.endswith(".pth")
+        ]
+    candidates = sorted(candidates, key=os.path.getmtime, reverse=True)
+    return candidates
+
+
+def get_rng_state():
+    rng_state = dict(
+        numpy=np.random.get_state(),
+        torch=torch.get_rng_state(),
+        python=random.getstate(),
+    )
+    if torch.cuda.is_available():
+        rng_state["torch_cuda"] = torch.cuda.get_rng_state_all()
+    return rng_state
+
+
+def set_rng_state(rng_state):
+    if rng_state is None:
+        return
+    np.random.set_state(rng_state["numpy"])
+    torch.set_rng_state(rng_state["torch"])
+    random.setstate(rng_state["python"])
+    if "torch_cuda" in rng_state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(rng_state["torch_cuda"])
 
 
 def train(config, device, resume=False, overwrite=False):
@@ -61,10 +103,6 @@ def train(config, device, resume=False, overwrite=False):
         auto_remove_exp_dir=overwrite,
         resume=resume,
     )
-
-    # path for latest model and backup (to support @resume functionality)
-    latest_model_path = os.path.join(time_dir, "last.pth")
-    latest_model_backup_path = os.path.join(time_dir, "last_bak.pth")
 
     if config.experiment.logging.terminal_output_to_txt:
         # log stdout and stderr to a text file
@@ -97,10 +135,13 @@ def train(config, device, resume=False, overwrite=False):
         # update env meta if applicable
         from robomimic.utils.python_utils import deep_update
         deep_update(env_meta, config.experiment.env_meta_update_dict)
+        env_meta = EnvUtils.apply_rollout_camera_view_mapping_to_env_meta(env_meta, config)
         env_meta_list.append(env_meta)
 
+        dataset_cfg_for_shape = dict(dataset_cfg)
+        dataset_cfg_for_shape["action_config"] = config.train.action_config
         shape_meta = FileUtils.get_shape_metadata_from_dataset(
-            dataset_config=dataset_cfg,
+            dataset_config=dataset_cfg_for_shape,
             action_keys=config.train.action_keys,
             all_obs_keys=config.all_obs_keys,
             verbose=True
@@ -245,15 +286,27 @@ def train(config, device, resume=False, overwrite=False):
     if resume:
         # load ckpt dict
         print("*" * 50)
-        print("resuming from ckpt at {}".format(latest_model_path))
-        try:
-            ckpt_dict = FileUtils.load_dict_from_checkpoint(ckpt_path=latest_model_path)
-        except Exception as e:
-            print("got error: {} when loading from {}".format(e, latest_model_path))
-            print("trying backup path {}".format(latest_model_backup_path))
-            ckpt_dict = FileUtils.load_dict_from_checkpoint(ckpt_path=latest_model_backup_path)
-        # load model weights and optimizer state
-        model.deserialize(ckpt_dict["model"], load_optimizers=True)
+        resume_ckpt_paths = resume_checkpoint_candidates(ckpt_dir=ckpt_dir)
+        if resume_ckpt_paths:
+            ckpt_dict = None
+            resume_ckpt_path = None
+            for ckpt_path in resume_ckpt_paths:
+                print("trying resume ckpt at {}".format(ckpt_path))
+                try:
+                    ckpt_dict = FileUtils.load_dict_from_checkpoint(ckpt_path=ckpt_path)
+                    resume_ckpt_path = ckpt_path
+                    break
+                except Exception as e:
+                    print("got error: {} when loading from {}".format(e, ckpt_path))
+            if ckpt_dict is None:
+                print("resume requested but no usable checkpoint was found; starting from epoch 1")
+                resume = False
+            else:
+                print("resuming from ckpt at {}".format(resume_ckpt_path))
+                model.deserialize(ckpt_dict["model"], load_optimizers=True)
+        else:
+            print("resume requested but no model_epoch checkpoint was found; starting from epoch 1")
+            resume = False
         print("*" * 50)
     
     # if checkpoint is specified, load in model weights;
@@ -284,6 +337,7 @@ def train(config, device, resume=False, overwrite=False):
     best_valid_loss = None
     best_return = {k: -np.inf for k in envs} if config.experiment.rollout.enabled else None
     best_success_rate = {k: -1. for k in envs} if config.experiment.rollout.enabled else None
+    checkpoint_success_rates_csv_path = os.path.join(time_dir, "checkpoint_success_rates.csv")
     last_ckpt_time = time.time()
 
     start_epoch = 1 # epoch numbers start at 1
@@ -294,6 +348,8 @@ def train(config, device, resume=False, overwrite=False):
         best_valid_loss = variable_state["best_valid_loss"]
         best_return = variable_state["best_return"]
         best_success_rate = variable_state["best_success_rate"]
+        if "rng_state" in variable_state:
+            set_rng_state(variable_state["rng_state"])
         print("*" * 50)
         print("resuming training from epoch {}".format(start_epoch))
         print("*" * 50)
@@ -310,6 +366,7 @@ def train(config, device, resume=False, overwrite=False):
 
         # setup checkpoint path
         epoch_ckpt_name = "model_epoch_{}".format(epoch)
+        save_best_validation_ckpt = False
 
         # check for recurring checkpoint saving conditions
         should_save_ckpt = False
@@ -360,11 +417,13 @@ def train(config, device, resume=False, overwrite=False):
                 if config.experiment.save.enabled and config.experiment.save.on_best_validation:
                     epoch_ckpt_name += "_best_validation_{}".format(best_valid_loss)
                     should_save_ckpt = True
+                    save_best_validation_ckpt = True
                     ckpt_reason = "valid" if ckpt_reason is None else ckpt_reason
 
         # Evaluate the model by by running rollouts
 
         # do rollouts at fixed rate or if it's time to save a new ckpt
+        all_rollout_logs = None
         video_paths = None
         rollout_check = (epoch % config.experiment.rollout.rate == 0) or (should_save_ckpt and ckpt_reason == "time")
         if config.experiment.rollout.enabled and (epoch > config.experiment.rollout.warmstart) and rollout_check:
@@ -386,6 +445,7 @@ def train(config, device, resume=False, overwrite=False):
                 video_dir=video_dir if config.experiment.render_video else None,
                 epoch=epoch,
                 video_skip=config.experiment.get("video_skip", 5),
+                video_camera_names=config.experiment.rollout.get("video_camera_names", None),
                 terminate_on_success=config.experiment.rollout.terminate_on_success,
             )
 
@@ -424,37 +484,46 @@ def train(config, device, resume=False, overwrite=False):
             best_valid_loss=best_valid_loss,
             best_return=best_return,
             best_success_rate=best_success_rate,
+            rng_state=get_rng_state(),
         )
 
         # Save model checkpoints based on conditions (success rate, validation loss, etc)
         if should_save_ckpt:    
+            ckpt_path = os.path.join(ckpt_dir, epoch_ckpt_name + ".pth")
             TrainUtils.save_model(
                 model=model,
                 config=config,
                 env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
                 shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
                 variable_state=variable_state,
-                ckpt_path=os.path.join(ckpt_dir, epoch_ckpt_name + ".pth"),
+                ckpt_path=ckpt_path,
                 obs_normalization_stats=obs_normalization_stats,
                 action_normalization_stats=action_normalization_stats,
             )
+            if all_rollout_logs is not None:
+                TrainUtils.write_checkpoint_success_rates_csv(
+                    csv_path=checkpoint_success_rates_csv_path,
+                    checkpoint_epoch=epoch,
+                    all_rollout_logs=all_rollout_logs,
+                )
+            if save_best_validation_ckpt:
+                TrainUtils.remove_previous_best_validation_ckpts(
+                    ckpt_dir=ckpt_dir,
+                    current_ckpt_path=ckpt_path,
+                )
 
-        # always save latest model for resume functionality
-        print("\nsaving latest model at {}...\n".format(latest_model_path))
-        TrainUtils.save_model(
-            model=model,
-            config=config,
-            env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
-            shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
-            variable_state=variable_state,
-            ckpt_path=latest_model_path,
-            obs_normalization_stats=obs_normalization_stats,
-            action_normalization_stats=action_normalization_stats,
-        )
-
-        # keep a backup model in case last.pth is malformed (e.g. job died last time during saving)
-        shutil.copyfile(latest_model_path, latest_model_backup_path)
-        print("\nsaved backup of latest model at {}\n".format(latest_model_backup_path))
+        latest_ckpt_check = epoch > 0 and epoch % LATEST_CHECKPOINT_EVERY_N_EPOCHS == 0
+        if ckpt_dir is not None and latest_ckpt_check:
+            TrainUtils.save_model(
+                model=model,
+                config=config,
+                env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
+                shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
+                variable_state=variable_state,
+                ckpt_path=latest_checkpoint_path(ckpt_dir),
+                obs_normalization_stats=obs_normalization_stats,
+                action_normalization_stats=action_normalization_stats,
+            )
 
         # Finally, log memory usage in MB
         process = psutil.Process(os.getpid())
@@ -560,11 +629,11 @@ if __name__ == "__main__":
         help="set this flag to run a quick training run for debugging purposes"
     )
 
-    # resume training from latest checkpoint
+    # resume training from latest periodic checkpoint
     parser.add_argument(
         "--resume",
         action='store_true',
-        help="set this flag to resume training from latest checkpoint",
+        help="set this flag to resume training from the newest usable model_epoch checkpoint",
     )
 
     # overwrite existing experiment directory

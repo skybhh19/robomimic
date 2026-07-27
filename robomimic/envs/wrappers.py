@@ -218,3 +218,31 @@ class FrameStackWrapper(EnvWrapper):
     def _to_string(self):
         """Info to pretty print."""
         return "num_frames={}".format(self.num_frames)
+
+
+class CameraViewMappingWrapper(EnvWrapper):
+    def __init__(self, env, camera_view_mapping):
+        super(CameraViewMappingWrapper, self).__init__(env=env)
+        self.camera_view_mapping = dict(camera_view_mapping)
+
+    def _to_string(self):
+        return "camera_view_mapping={}".format(self.camera_view_mapping)
+
+    def _map_obs(self, obs):
+        obs = dict(obs)
+        for policy_camera, rollout_camera in self.camera_view_mapping.items():
+            policy_key = "{}_image".format(policy_camera)
+            rollout_key = "{}_image".format(rollout_camera)
+            assert rollout_key in obs, (rollout_key, sorted(obs.keys()))
+            obs[policy_key] = obs[rollout_key]
+        return obs
+
+    def reset(self):
+        return self._map_obs(self.env.reset())
+
+    def reset_to(self, state):
+        return self._map_obs(self.env.reset_to(state))
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        return self._map_obs(obs), reward, done, info

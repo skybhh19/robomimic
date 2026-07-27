@@ -111,12 +111,16 @@ def optimizer_from_optim_params(net_optim_params, net):
             params=net.parameters(),
             lr=lr,
             weight_decay=net_optim_params["regularization"]["L2"],
+            betas=tuple(net_optim_params.get("betas", (0.9, 0.999))),
+            eps=net_optim_params.get("eps", 1e-8),
         )
     elif optimizer_type == "adamw":
         return optim.AdamW(
             params=net.parameters(),
             lr=lr,
             weight_decay=net_optim_params["regularization"]["L2"],
+            betas=tuple(net_optim_params.get("betas", (0.9, 0.999))),
+            eps=net_optim_params.get("eps", 1e-8),
         )
 
 
